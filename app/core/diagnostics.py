@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -322,6 +324,80 @@ def check_discord_cache() -> CheckResult:
         "Если голос не работает — очистите кэш.",
         fix_label="Очистить кэш", fix=clear_discord_cache,
     )
+
+
+
+# --- инструменты ---------------------------------------------------------
+
+DISCORD_LAUNCHERS = (
+    ("discord", "Discord", "Discord.exe"),
+    ("discordptb", "Discord PTB", "DiscordPTB.exe"),
+    ("discordcanary", "Discord Canary", "DiscordCanary.exe"),
+)
+
+
+def discord_installed() -> list[tuple[str, str, str]]:
+    """Установленные сборки Discord: (папка, название, имя процесса)."""
+    appdata = os.environ.get("LOCALAPPDATA") or ""
+    found = []
+    for folder, title, process in DISCORD_LAUNCHERS:
+        if appdata and (Path(appdata) / folder.capitalize().replace("ptb", "PTB")
+                        .replace("canary", "Canary")).is_dir():
+            found.append((folder, title, process))
+        elif appdata and (Path(appdata) / folder).is_dir():
+            found.append((folder, title, process))
+    return found
+
+
+def _discord_launcher(folder: str) -> Path | None:
+    """Discord запускается через Update.exe, иначе не обновится и не стартует."""
+    appdata = os.environ.get("LOCALAPPDATA") or ""
+    if not appdata:
+        return None
+    for candidate in (folder, folder.capitalize(), "Discord", "DiscordPTB",
+                      "DiscordCanary"):
+        base = Path(appdata) / candidate
+        updater = base / "Update.exe"
+        if updater.is_file():
+            return updater
+    return None
+
+
+def launch_discord() -> str:
+    """Запустить установленный Discord."""
+    appdata = os.environ.get("LOCALAPPDATA") or ""
+    if not appdata:
+        return "Не найдена папка AppData."
+
+    for folder, title, process in DISCORD_LAUNCHERS:
+        launcher = _discord_launcher(folder)
+        if launcher is None:
+            continue
+        try:
+            subprocess.Popen(
+                [str(launcher), "--processStart", process],
+                cwd=str(launcher.parent),
+                creationflags=winapi.CREATE_NO_WINDOW,
+                close_fds=True,
+            )
+        except OSError as exc:
+            return f"Не удалось запустить {title}: {exc}"
+        logs.info(f"Запущен {title}")
+        return f"{title} запускается."
+    return "Discord не найден на компьютере."
+
+
+def restart_discord_clean() -> str:
+    """Закрыть Discord, очистить кэш и запустить заново.
+
+    Именно это чаще всего чинит голосовые каналы после смены стратегии:
+    Discord держит адреса голосовых серверов в кэше и продолжает стучаться
+    по старым, пока его не перезапустить.
+    """
+    cleared = clear_discord_cache()
+    time.sleep(1.0)
+    started = launch_discord()
+    return f"{cleared} {started}"
 
 
 ALL_CHECKS: tuple[Callable[[], CheckResult], ...] = (

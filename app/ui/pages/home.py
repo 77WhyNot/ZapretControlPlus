@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtWidgets import (
+    QComboBox,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.core import autotest, winapi
 from app.core.config import config
@@ -17,6 +24,7 @@ from app.ui.context import AppContext
 from app.ui.pages.base import Banner, Page
 from app.ui.rails import RailsBoard
 from app.ui.widgets import (
+    clear_layout,
     Button,
     Card,
     Divider,
@@ -438,11 +446,7 @@ class HomePage(Page):
     def _run_check(self) -> None:
         if self._check_worker is not None and self._check_worker.busy():
             return
-        while self.check_results.count():
-            item = self.check_results.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        clear_layout(self.check_results)
 
         self.btn_check.setEnabled(False)
         self.check_spinner.start()
@@ -460,24 +464,29 @@ class HomePage(Page):
     def _check_ready(self, results) -> None:
         self.btn_check.setEnabled(True)
         self.check_spinner.stop()
+        # Чистим здесь тоже: иначе повторный показ результатов наложился бы
+        # на предыдущий, если отрисовку вызвали в обход кнопки.
+        clear_layout(self.check_results)
         from app.ui.widgets import IconLabel
 
         for item in results:
-            line = QHBoxLayout()
+            # Каждая строка — отдельный виджет, а не вложенная компоновка:
+            # компоновки при очистке не удалялись и наезжали друг на друга.
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
             line.setSpacing(9)
+
             token = "success" if item.ok else "danger"
             line.addWidget(IconLabel(
                 "check" if item.ok else "cross", self.context.color(token), 15
             ))
-            name = QLabel(item.target.key or item.target.label)
-            line.addWidget(name)
+            line.addWidget(QLabel(item.target.key or item.target.label))
             line.addStretch(1)
-            timing = faint_label(f"{item.ms:.0f} мс" if item.ok else "нет ответа",
-                                 wrap=False)
-            line.addWidget(timing)
-            holder = QVBoxLayout()
-            holder.addLayout(line)
-            self.check_results.addLayout(holder)
+            line.addWidget(faint_label(
+                f"{item.ms:.0f} мс" if item.ok else "нет ответа", wrap=False
+            ))
+            self.check_results.addWidget(row)
 
         failed = [item for item in results if not item.ok]
         if not failed:

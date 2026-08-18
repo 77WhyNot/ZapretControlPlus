@@ -38,6 +38,27 @@ def apply_variant(widget: QWidget, variant: str = "", size: str = "") -> QWidget
     return widget
 
 
+def clear_layout(layout) -> None:
+    """Полностью опустошить компоновку.
+
+    Наивная версия удаляет только виджеты, а вложенные компоновки остаются
+    и накладываются на новые — интерфейс визуально «наезжает» сам на себя.
+    """
+    if layout is None:
+        return
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.setParent(None)
+            widget.deleteLater()
+            continue
+        child = item.layout()
+        if child is not None:
+            clear_layout(child)
+            child.deleteLater()
+
+
 def restyle(widget: QWidget) -> None:
     """Перечитать QSS после смены динамического свойства."""
     style = widget.style()

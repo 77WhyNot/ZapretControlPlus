@@ -20,6 +20,7 @@ from app.core.vpn.links import Server
 from app.ui.context import AppContext
 from app.ui.pages.base import Page
 from app.ui.widgets import (
+    clear_layout,
     Badge,
     Button,
     Card,
@@ -361,11 +362,7 @@ class ServersPage(Page):
         self.body.addWidget(card)
 
     def _rebuild_board(self) -> None:
-        while self.rows_layout.count():
-            item = self.rows_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        clear_layout(self.rows_layout)
         self._rows = []
 
         active = str(config.get("vpn_selected_server", ""))

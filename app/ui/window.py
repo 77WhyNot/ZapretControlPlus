@@ -255,7 +255,9 @@ class MainWindow(QWidget):
         self.pages.setObjectName("Content")
         self.page_widgets: dict[str, QWidget] = {}
 
-        factories = {
+        # Страницы строятся при первом открытии: собирать все десять на старте
+        # долго, и окно успевало показаться недостроенным.
+        self._factories = {
             "home": HomePage,
             "servers": ServersPage,
             "vpnapps": VpnAppsPage,
@@ -276,10 +278,6 @@ class MainWindow(QWidget):
             sidebar_layout.addWidget(button)
             self.nav_buttons[key] = button
 
-            page = factories[key](self.context)
-            self.page_widgets[key] = page
-            self.pages.addWidget(page)
-
         body_layout.addWidget(self.sidebar)
         body_layout.addWidget(self.pages, 1)
 
@@ -291,7 +289,7 @@ class MainWindow(QWidget):
         self.tray.setToolTip(APP_NAME)
         self.tray.activated.connect(self._tray_activated)
 
-        menu = QMenu()
+        menu = QMenu(self)
         self.action_show = QAction("Открыть", self)
         self.action_show.triggered.connect(self.show_normal)
         self.action_toggle = QAction("Запустить обход", self)
@@ -304,6 +302,8 @@ class MainWindow(QWidget):
         menu.addSeparator()
         menu.addAction(action_quit)
         self.tray.setContextMenu(menu)
+        # Иконку ставим до show(): иначе Qt пишет «No Icon set».
+        self.tray.setIcon(self._app_icon())
         self.tray.show()
 
         self.context.status_changed.connect(self._update_tray)
@@ -311,10 +311,22 @@ class MainWindow(QWidget):
     # --- тема ------------------------------------------------------------
 
     def apply_theme(self) -> None:
+        from app.ui import appicons, icons as icon_cache
+
+        # Цвета изменились — кэш нарисованных иконок больше не годится.
+        icon_cache.clear_cache()
+        appicons.clear_cache()
+
         qss = self.context.rebuild_theme()
-        application = QApplication.instance()
-        if application is not None:
-            application.setStyleSheet(qss)
+
+        # Стиль вешаем на окно, а не на приложение: QApplication.setStyleSheet
+        # перекрашивает вообще всё дерево и занимает больше секунды, окно —
+        # втрое быстрее. Меню трея для этого сделано дочерним к окну.
+        self.setUpdatesEnabled(False)
+        try:
+            self.setStyleSheet(qss)
+        finally:
+            self.setUpdatesEnabled(True)
         for button in self.nav_buttons.values():
             button.apply_theme()
         self._update_window_icon()
@@ -332,8 +344,21 @@ class MainWindow(QWidget):
 
     # --- навигация -------------------------------------------------------
 
-    def show_page(self, key: str) -> None:
+    def ensure_page(self, key: str) -> QWidget | None:
+        """Создать страницу, если её ещё нет."""
         widget = self.page_widgets.get(key)
+        if widget is not None:
+            return widget
+        factory = self._factories.get(key)
+        if factory is None:
+            return None
+        widget = factory(self.context)
+        self.page_widgets[key] = widget
+        self.pages.addWidget(widget)
+        return widget
+
+    def show_page(self, key: str) -> None:
+        widget = self.ensure_page(key)
         if widget is None:
             return
         self.pages.setCurrentWidget(widget)
@@ -448,7 +473,7 @@ class MainWindow(QWidget):
         self.activateWindow()
 
     def _tray_toggle(self) -> None:
-        home = self.page_widgets.get("home")
+        home = self.ensure_page("home")
         toggle = getattr(home, "toggle_bypass", None)
         if callable(toggle):
             toggle()
@@ -476,13 +501,13 @@ class MainWindow(QWidget):
     # --- запуск и завершение ---------------------------------------------
 
     def _startup_tasks(self) -> None:
-        updates_page = self.page_widgets.get("updates")
+        updates_page = self.ensure_page("updates")
         if config.get("check_core_updates", True) and updater.is_check_due():
             checker = getattr(updates_page, "check_silently", None)
             if callable(checker):
                 checker()
         if config.get("autorun_last_strategy", False) and not self.context.status.running:
-            home = self.page_widgets.get("home")
+            home = self.ensure_page("home")
             starter = getattr(home, "start_bypass", None)
             if callable(starter):
                 starter()
