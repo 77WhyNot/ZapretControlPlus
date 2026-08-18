@@ -3,7 +3,7 @@
 # --- Продукт -------------------------------------------------------------
 APP_NAME = "Zapret Control+"
 APP_ID = "ZapretControlPlus"
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 APP_AUTHOR = "ketamine"
 APP_AUTHOR_FULL = "Ivan Milyaev (ketamine)"
 APP_PUBLISHER = "Ivan Milyaev (ketamine)"
@@ -39,6 +39,11 @@ WINWS_EXE = "winws.exe"
 
 # Задача планировщика для автозапуска приложения с правами администратора.
 AUTOSTART_TASK = "ZapretControlPlus Autostart"
+
+# Где взять подписку, если своей нет. Сервис сторонний — программа
+# с ним никак не связана и ничего о нём не знает.
+SUBSCRIPTION_SHOP_URL = "https://t.me/ultimavpnbot/app?startapp=NhYiCVMT"
+SUBSCRIPTION_SHOP_NAME = "UltimaVPN"
 
 # --- VPN -----------------------------------------------------------------
 SINGBOX_REPO = "SagerNet/sing-box"

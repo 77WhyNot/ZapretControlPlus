@@ -20,6 +20,7 @@ from app.core.vpn.links import Server
 from app.ui.context import AppContext
 from app.ui.pages.base import Page
 from app.ui.widgets import (
+    IconLabel,
     clear_layout,
     Badge,
     Button,
@@ -187,6 +188,7 @@ class ServersPage(Page):
         self._latency: dict[str, int] = {}
 
         self._build_subscription()
+        self._build_shop()
         self._build_board()
         self.apply_theme()
         self._load_cached()
@@ -274,6 +276,7 @@ class ServersPage(Page):
         self._servers, self._info = servers, info
         self._render_subscription()
         self._rebuild_board()
+        self._sync_shop()
         self.context.ok(f"Загружено серверов: {len(servers)}")
         self.context.servers_changed.emit()
         self.measure_all()
@@ -284,6 +287,7 @@ class ServersPage(Page):
             self._servers, self._info = servers, info
             self._render_subscription()
             self._rebuild_board()
+        self._sync_shop()
 
     def _render_subscription(self) -> None:
         info = self._info
@@ -315,6 +319,43 @@ class ServersPage(Page):
             self.quota_bar.setVisible(False)
         parts.append(f"действует до {info.expire_label}")
         self.sub_details.setText(" · ".join(parts))
+
+    # --- где взять подписку ----------------------------------------------
+
+    def _build_shop(self) -> None:
+        """Пока подписки нет — предложение заметное, потом сворачивается."""
+        from app.core.constants import SUBSCRIPTION_SHOP_NAME, SUBSCRIPTION_SHOP_URL
+
+        self.shop_card = Card(padding=18, spacing=11)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        self.shop_icon = IconLabel("globe", self.context.color("accent"), 20)
+        header.addWidget(self.shop_icon)
+        header.addWidget(section_label("Нет своей подписки?"))
+        header.addStretch(1)
+        self.btn_shop = Button(f"Открыть {SUBSCRIPTION_SHOP_NAME}", variant="soft")
+        self.btn_shop.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(SUBSCRIPTION_SHOP_URL))
+        )
+        header.addWidget(self.btn_shop)
+        self.shop_card.add_layout(header)
+
+        self.shop_text = faint_label(
+            f"Программе нужна ссылка-подписка от любого сервиса. Если её пока нет, "
+            f"можно взять у {SUBSCRIPTION_SHOP_NAME} — откроется бот в Telegram. "
+            "Сервис сторонний, к программе отношения не имеет: подойдёт и любой "
+            "другой, лишь бы выдавал ссылку или ключ vless://."
+        )
+        self.shop_card.add(self.shop_text)
+
+        self.body.addWidget(self.shop_card)
+
+    def _sync_shop(self) -> None:
+        """Есть серверы — сворачиваем предложение до одной строки."""
+        has_subscription = bool(self._servers)
+        self.shop_text.setVisible(not has_subscription)
+        self.shop_icon.setVisible(not has_subscription)
 
     # --- табло -----------------------------------------------------------
 
@@ -459,10 +500,12 @@ class ServersPage(Page):
     def on_activate(self) -> None:
         if not self._servers:
             self._load_cached()
+        self._sync_shop()
 
     def apply_theme(self) -> None:
         accent = self.context.color("accent")
         self.sub_spinner.set_color(accent)
         self.board_spinner.set_color(accent)
+        self.shop_icon.set_color(accent)
         for row in self._rows:
             row.apply_theme()
