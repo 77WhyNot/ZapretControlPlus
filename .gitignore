@@ -1,0 +1,34 @@
+# Сборка
+dist/
+build/pyi/
+build/pyi_test/
+build/testdist/
+build/art/
+build/preview/
+build/preview_real/
+
+# icon.ico и icon.png генерируются скриптом сборки, но лежат в репозитории:
+# на них ссылается README, и без них не соберётся exe на чистой машине.
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Локальные данные ядра, которые меняются при работе
+payload/zapret/lists/*-user.txt
+payload/zapret/utils/game_filter.enabled
+
+# Прочее
+.vscode/
+.idea/
+*.log
+Thumbs.db
+
+# Превью интерфейса
+build/preview*/
+
+# Движок VPN скачивается скриптом сборки — в репозитории ему не место
+payload/singbox/
