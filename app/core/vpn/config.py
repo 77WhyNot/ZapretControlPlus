@@ -22,6 +22,9 @@ MODE_LABELS = {
     MODE_ALL: "Весь трафик",
 }
 
+# Своё имя адаптера: с общим "tun0" мы дрались бы за него с любым другим
+# клиентом на том же движке — например с Happ.
+TUN_NAME = "ZapretControl"
 PROBE_TAG = "probe-in"
 PROXY_TAG = "proxy"
 DIRECT_TAG = "direct"
@@ -121,10 +124,12 @@ def build_config(
                     "detour": PROXY_TAG if dns_through_tunnel else DIRECT_TAG,
                 },
             ],
-            "rules": [
+            "rules": ([
+                {"query_type": ["A", "AAAA"], "server": "dns-remote"},
+            ] if dns_through_tunnel else [
                 {"query_type": ["A", "AAAA"], "server": "dns-local"},
-            ],
-            "final": "dns-local",
+            ]),
+            "final": "dns-remote" if dns_through_tunnel else "dns-local",
             "strategy": "prefer_ipv4" if not ipv6 else "prefer_ipv6",
             "independent_cache": True,
         },
@@ -139,6 +144,7 @@ def build_config(
             {
                 "type": "tun",
                 "tag": "tun-in",
+                "interface_name": TUN_NAME,
                 "address": (["172.19.0.1/30", "fdfe:dcba:9876::1/126"]
                             if ipv6 else ["172.19.0.1/30"]),
                 "mtu": int(mtu),
