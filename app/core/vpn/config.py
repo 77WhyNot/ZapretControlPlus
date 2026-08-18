@@ -22,6 +22,7 @@ MODE_LABELS = {
     MODE_ALL: "Весь трафик",
 }
 
+PROBE_TAG = "probe-in"
 PROXY_TAG = "proxy"
 DIRECT_TAG = "direct"
 AUTO_TAG = "auto"
@@ -47,6 +48,7 @@ def build_config(
     mtu: int = 9000,
     dns_through_tunnel: bool = True,
     bypass_lan: bool = True,
+    probe_port: int = 0,
 ) -> dict[str, Any]:
     vpn_apps = [name for name in (vpn_apps or []) if name]
     direct_apps = [name for name in (direct_apps or []) if name]
@@ -88,6 +90,11 @@ def build_config(
         {"action": "sniff"},
         {"protocol": "dns", "action": "hijack-dns"},
     ]
+    # Служебный вход всегда идёт в туннель, что бы ни было в правилах:
+    # только так можно узнать настоящий выходной адрес VPN. Само приложение
+    # обычно ходит напрямую и увидело бы свой реальный IP.
+    if probe_port:
+        rules.append({"inbound": [PROBE_TAG], "outbound": PROXY_TAG})
     if bypass_lan:
         rules.append({"ip_is_private": True, "outbound": DIRECT_TAG})
 
@@ -121,7 +128,14 @@ def build_config(
             "strategy": "prefer_ipv4" if not ipv6 else "prefer_ipv6",
             "independent_cache": True,
         },
-        "inbounds": [
+        "inbounds": ([
+            {
+                "type": "mixed",
+                "tag": PROBE_TAG,
+                "listen": "127.0.0.1",
+                "listen_port": probe_port,
+            }
+        ] if probe_port else []) + [
             {
                 "type": "tun",
                 "tag": "tun-in",

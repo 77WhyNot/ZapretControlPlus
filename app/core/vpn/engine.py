@@ -71,6 +71,8 @@ class VpnEngine:
         self._selected = ""
         self._mode = config_module.MODE_SELECTED
         self._started_at = 0.0
+        self._probe_port = 0
+        self._last_output: list[str] = []
         self.on_state_change: Callable[[], None] | None = None
 
     # --- состояние -------------------------------------------------------
@@ -139,7 +141,9 @@ class VpnEngine:
         self.stop(quiet=True)
 
         self._port = _free_port(self._port)
+        self._probe_port = _free_port(0)
         self._secret = secrets.token_hex(16)
+        self._last_output = []
         from app.core.config import config as settings
 
         config = config_module.build_config(
@@ -152,6 +156,7 @@ class VpnEngine:
             dns_through_tunnel=bool(settings.get("vpn_dns_through_tunnel", True)),
             bypass_lan=bool(settings.get("vpn_bypass_lan", True)),
             dns_over_proxy=str(settings.get("vpn_dns_server", "1.1.1.1")),
+            probe_port=self._probe_port,
         )
         self.config_path.write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -192,10 +197,7 @@ class VpnEngine:
         deadline = time.time() + 12
         while time.time() < deadline:
             if process.poll() is not None:
-                raise VpnError(
-                    "sing-box завершился сразу после запуска. Проверьте журнал: "
-                    "чаще всего дело в неверном ключе подписки."
-                )
+                raise VpnError(self._failure_reason())
             if self._clash_alive():
                 self._started_at = time.time()
                 self._notify()
@@ -203,7 +205,80 @@ class VpnEngine:
             time.sleep(0.4)
 
         self.stop(quiet=True)
-        raise VpnError("VPN не поднялся за 12 секунд. Подробности — в журнале.")
+        raise VpnError(
+            "VPN не поднялся за 12 секунд. " + self._failure_reason()
+        )
+
+    def _failure_reason(self) -> str:
+        """Настоящая причина из вывода движка, а не общая фраза."""
+        text = " ".join(self._last_output[-12:]).lower()
+        hints = (
+            ("permission denied", "Нет прав на создание сетевого адаптера. "
+                                  "Запустите программу от имени администратора."),
+            ("wintun", "Не удалось загрузить драйвер Wintun. Обычно мешает "
+                       "антивирус или другой VPN-клиент, который держит адаптер."),
+            ("configure tun", "Windows не дала создать адаптер туннеля. Чаще всего "
+                              "его занял другой VPN-клиент — закройте его."),
+            ("address already in use", "Порт занят другой программой."),
+            ("bind: ", "Не удалось занять порт — мешает другая программа."),
+            ("timeout", "Сервер подписки не отвечает. Смените сервер или проверьте интернет."),
+            ("authentication failed", "Сервер отверг ключ. Обновите подписку."),
+            ("reality", "Сервер отверг ключ Reality. Обновите подписку."),
+            ("no such host", "Адрес сервера не разрешается. Проверьте DNS или интернет."),
+            ("connection refused", "Сервер отказал в соединении. Попробуйте другой."),
+        )
+        for needle, message in hints:
+            if needle in text:
+                return message
+        tail = self._last_output[-1] if self._last_output else ""
+        if tail:
+            return f"Движок сообщил: {tail}"
+        return ("Движок завершился молча. Откройте «Диагностика» → журнал, "
+                "там будет причина.")
+
+    def exit_address(self, timeout: int = 12) -> dict[str, str]:
+        """Куда мир видит наш выход: адрес и страна — через сам туннель."""
+        if not self._probe_port:
+            raise VpnError("VPN не запущен.")
+        proxies = {
+            "http": f"socks5h://127.0.0.1:{self._probe_port}",
+            "https": f"socks5h://127.0.0.1:{self._probe_port}",
+        }
+        errors = []
+        for url in ("https://ipinfo.io/json", "https://api.ip.sb/geoip",
+                    "https://ifconfig.co/json"):
+            try:
+                response = requests.get(url, proxies=proxies, timeout=timeout)
+                response.raise_for_status()
+                data = response.json()
+            except (requests.RequestException, ValueError) as exc:
+                errors.append(type(exc).__name__)
+                continue
+            return {
+                "ip": str(data.get("ip") or data.get("query") or "?"),
+                "country": str(data.get("country") or data.get("country_code") or "?"),
+                "city": str(data.get("city") or ""),
+                "org": str(data.get("org") or data.get("asn_org") or ""),
+                "source": url.split("/")[2],
+            }
+        raise VpnError(
+            "Туннель поднят, но наружу через него ничего не проходит "
+            f"({', '.join(errors)}). Смените сервер."
+        )
+
+    def direct_address(self, timeout: int = 10) -> dict[str, str]:
+        """Тот же запрос мимо туннеля — для сравнения."""
+        session = requests.Session()
+        session.trust_env = False
+        try:
+            response = session.get("https://ipinfo.io/json", timeout=timeout)
+            data = response.json()
+            return {"ip": str(data.get("ip") or "?"),
+                    "country": str(data.get("country") or "?")}
+        except (requests.RequestException, ValueError):
+            return {"ip": "?", "country": "?"}
+        finally:
+            session.close()
 
     def validate_config(self) -> str:
         """Проверить конфиг движком. Пустая строка — всё в порядке."""
@@ -237,6 +312,8 @@ class VpnEngine:
                 line = winapi.decode_console(raw).rstrip()
                 if line:
                     logs.write(line, "VPN")
+                    self._last_output.append(line)
+                    del self._last_output[:-40]
         except (OSError, ValueError):
             pass
         finally:
