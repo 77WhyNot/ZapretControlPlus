@@ -140,10 +140,18 @@ class VpnEngine:
 
         self._port = _free_port(self._port)
         self._secret = secrets.token_hex(16)
+        from app.core.config import config as settings
+
         config = config_module.build_config(
             servers, selected=selected, mode=mode,
             vpn_apps=vpn_apps, direct_apps=direct_apps,
             clash_port=self._port, clash_secret=self._secret, stack=stack,
+            strict_route=bool(settings.get("vpn_strict_route", False)),
+            ipv6=bool(settings.get("vpn_ipv6", False)),
+            mtu=int(settings.get("vpn_mtu", 9000)),
+            dns_through_tunnel=bool(settings.get("vpn_dns_through_tunnel", True)),
+            bypass_lan=bool(settings.get("vpn_bypass_lan", True)),
+            dns_over_proxy=str(settings.get("vpn_dns_server", "1.1.1.1")),
         )
         self.config_path.write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -357,6 +365,30 @@ class VpnEngine:
             return list(response.json().get("connections") or [])
         except (requests.RequestException, ValueError, TypeError):
             return []
+
+    def routed_connections(self) -> list[dict[str, Any]]:
+        """Кто куда пошёл: программа, адрес и через какой выход.
+
+        Это единственный способ увидеть, работает ли раздельный туннель:
+        движок сам сообщает, какой цепочкой ушло каждое соединение.
+        """
+        result: list[dict[str, Any]] = []
+        for item in self.active_connections():
+            meta = item.get("metadata") or {}
+            chains = item.get("chains") or []
+            process = str(meta.get("processPath") or meta.get("process") or "")
+            if process:
+                process = process.replace("\\", "/").rsplit("/", 1)[-1]
+            host = str(meta.get("host") or meta.get("destinationIP") or "")
+            port = str(meta.get("destinationPort") or "")
+            result.append({
+                "process": process or "неизвестно",
+                "target": f"{host}:{port}" if port else host,
+                "outbound": chains[0] if chains else "?",
+                "chain": " ← ".join(chains) if chains else "",
+                "network": str(meta.get("network") or ""),
+            })
+        return result
 
     def shutdown(self) -> None:
         self.stop(quiet=True)

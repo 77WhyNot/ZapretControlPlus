@@ -85,12 +85,12 @@ PRIMARY_PAGES = (
     ("home", "Маршруты", "shield_check"),
     ("servers", "Серверы", "globe"),
     ("vpnapps", "Приложения", "layers"),
+    ("dns", "DNS", "bolt"),
     ("strategies", "Стратегии", "refresh"),
     ("diagnostics", "Диагностика", "stethoscope"),
 )
 
 MORE_PAGES = (
-    ("dns", "DNS", "bolt"),
     ("lists", "Списки", "list"),
     ("updates", "Обновления", "download"),
     ("settings", "Настройки", "settings"),
