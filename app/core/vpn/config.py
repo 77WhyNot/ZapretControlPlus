@@ -42,6 +42,11 @@ def build_config(
     stack: str = STACK_DEFAULT,
     log_level: str = "warn",
     dns_over_proxy: str = "1.1.1.1",
+    strict_route: bool = False,
+    ipv6: bool = False,
+    mtu: int = 9000,
+    dns_through_tunnel: bool = True,
+    bypass_lan: bool = True,
 ) -> dict[str, Any]:
     vpn_apps = [name for name in (vpn_apps or []) if name]
     direct_apps = [name for name in (direct_apps or []) if name]
@@ -77,11 +82,14 @@ def build_config(
     })
     outbounds.append({"type": "direct", "tag": DIRECT_TAG})
 
+    # Порядок правил важен: сначала распознаём протокол, потом перехватываем
+    # DNS, потом отсекаем локальную сеть — и только затем решаем по программе.
     rules: list[dict[str, Any]] = [
         {"action": "sniff"},
         {"protocol": "dns", "action": "hijack-dns"},
-        {"ip_is_private": True, "outbound": DIRECT_TAG},
     ]
+    if bypass_lan:
+        rules.append({"ip_is_private": True, "outbound": DIRECT_TAG})
 
     if mode == MODE_ALL:
         final = PROXY_TAG
@@ -103,24 +111,25 @@ def build_config(
                     "type": "https",
                     "tag": "dns-remote",
                     "server": dns_over_proxy,
-                    "detour": PROXY_TAG,
+                    "detour": PROXY_TAG if dns_through_tunnel else DIRECT_TAG,
                 },
             ],
             "rules": [
                 {"query_type": ["A", "AAAA"], "server": "dns-local"},
             ],
             "final": "dns-local",
-            "strategy": "prefer_ipv4",
+            "strategy": "prefer_ipv4" if not ipv6 else "prefer_ipv6",
             "independent_cache": True,
         },
         "inbounds": [
             {
                 "type": "tun",
                 "tag": "tun-in",
-                "address": ["172.19.0.1/30"],
-                "mtu": 9000,
+                "address": (["172.19.0.1/30", "fdfe:dcba:9876::1/126"]
+                            if ipv6 else ["172.19.0.1/30"]),
+                "mtu": int(mtu),
                 "auto_route": True,
-                "strict_route": False,
+                "strict_route": bool(strict_route),
                 "stack": stack,
             }
         ],

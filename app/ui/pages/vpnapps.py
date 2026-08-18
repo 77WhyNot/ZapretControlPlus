@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -27,6 +28,8 @@ from app.ui.widgets import (
     Badge,
     Button,
     Card,
+    Divider,
+    Spinner,
     Switch,
     Worker,
     faint_label,
@@ -146,6 +149,8 @@ class VpnAppsPage(Page):
         self._build_summary()
         self._build_list()
         self._build_manual()
+        self._build_advanced()
+        self._build_connections()
         self.apply_theme()
 
     # --- режим -----------------------------------------------------------
@@ -198,8 +203,7 @@ class VpnAppsPage(Page):
 
         hints = {
             vpn_config.MODE_SELECTED:
-                "Через туннель пойдут только те программы, у которых включён "
-                "переключатель. Остальные — напрямую.",
+                "Через туннель пойдут только отмеченные программы. Все остальные, включая браузер, идут напрямую — там их подхватывает zapret. Если ничего не отмечено, VPN не делает ничего.",
             vpn_config.MODE_EXCEPT:
                 "Через туннель пойдёт всё, кроме отмеченных программ. Отмечайте "
                 "банки, госуслуги и игры — им туннель только мешает.",
@@ -407,6 +411,190 @@ class VpnAppsPage(Page):
         self.manual_input.clear()
         self.context.ok(f"«{name}» добавлена")
         self._reload_cards()
+
+    # --- тонкие настройки ------------------------------------------------
+
+    def _build_advanced(self) -> None:
+        from app.ui.widgets import SettingRow
+
+        card = Card(padding=20, spacing=13)
+        card.add(section_label("Тонкая настройка туннеля"))
+        card.add(faint_label(
+            "Трогайте, только если что-то не работает. Значения по умолчанию "
+            "подходят большинству, а после любой правки VPN нужно перезапустить."
+        ))
+        card.add(Divider())
+
+        self._adv_switches = []
+
+        stack_row = QHBoxLayout()
+        stack_row.setSpacing(10)
+        self.stack_box = QComboBox()
+        for key, label in (
+            ("mixed", "Смешанный — обычный выбор"),
+            ("system", "Системный — надёжнее опознаёт программы"),
+            ("gvisor", "gvisor — если система мешает"),
+        ):
+            self.stack_box.addItem(label, key)
+        index = self.stack_box.findData(str(config.get("vpn_stack", "mixed")))
+        if index >= 0:
+            self.stack_box.setCurrentIndex(index)
+        self.stack_box.currentIndexChanged.connect(
+            lambda: self._set_adv("vpn_stack", self.stack_box.currentData())
+        )
+        stack_row.addWidget(self.stack_box, 1)
+        card.add(SettingRow(
+            "Способ перехвата трафика",
+            "Именно от него зависит, сможет ли туннель понять, какой программе "
+            "принадлежит соединение. Если разделение по программам не работает — "
+            "переключите на «системный».",
+            None,
+        ))
+        card.add_layout(stack_row)
+        card.add(Divider())
+
+        self.sw_strict = self._adv_switch(
+            card, "vpn_strict_route", "Жёсткий перехват маршрута",
+            "Не даёт программам ходить в обход туннеля мимо правил. "
+            "Включайте, если часть трафика утекает напрямую.",
+        )
+        card.add(Divider())
+        self.sw_lan = self._adv_switch(
+            card, "vpn_bypass_lan", "Локальная сеть напрямую",
+            "Принтеры, роутер, домашние устройства и соседние компьютеры "
+            "не заворачиваются в туннель.",
+        )
+        card.add(Divider())
+        self.sw_dns = self._adv_switch(
+            card, "vpn_dns_through_tunnel", "DNS через туннель",
+            "Имена сайтов запрашиваются через VPN, а не у провайдера. "
+            "Скрывает от него, куда вы ходите, но чуть медленнее.",
+        )
+        card.add(Divider())
+        self.sw_ipv6 = self._adv_switch(
+            card, "vpn_ipv6", "Пускать IPv6 в туннель",
+            "Нужно, только если провайдер выдаёт IPv6 и сервер его поддерживает. "
+            "Иначе оставьте выключенным.",
+        )
+
+        self.body.addWidget(card)
+
+    def _adv_switch(self, card, key: str, title: str, description: str):
+        from app.ui.widgets import SettingRow
+
+        switch = Switch(bool(config.get(key)))
+        switch.toggled.connect(lambda value, k=key: self._set_adv(k, value))
+        card.add(SettingRow(title, description, switch))
+        self._adv_switches.append(switch)
+        return switch
+
+    def _set_adv(self, key: str, value) -> None:
+        config.set(key, value)
+        from app.core.vpn.engine import vpn_engine
+
+        if vpn_engine.status().running:
+            self.context.warn("Перезапустите VPN, чтобы настройка применилась.")
+
+    # --- что куда идёт ---------------------------------------------------
+
+    def _build_connections(self) -> None:
+        card = Card(padding=20, spacing=12)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        header.addWidget(section_label("Что куда идёт сейчас"))
+        header.addStretch(1)
+        self.conn_spinner = Spinner(16, self.context.color("accent"))
+        header.addWidget(self.conn_spinner)
+        self.btn_conn = Button("Показать соединения", variant="soft")
+        self.btn_conn.clicked.connect(self._load_connections)
+        header.addWidget(self.btn_conn)
+        card.add_layout(header)
+
+        card.add(faint_label(
+            "Главная проверка раздельного туннеля: движок сам сообщает, какая "
+            "программа куда пошла и каким выходом. Если у программы из списка "
+            "выход «direct» — правило до неё не дошло, и дело в способе "
+            "перехвата выше."
+        ))
+
+        self.conn_host = QWidget()
+        self.conn_layout = QVBoxLayout(self.conn_host)
+        self.conn_layout.setContentsMargins(0, 0, 0, 0)
+        self.conn_layout.setSpacing(5)
+        card.add(self.conn_host)
+
+        self.body.addWidget(card)
+
+    def _load_connections(self) -> None:
+        from app.core.vpn.engine import vpn_engine
+        from app.ui.widgets import Worker, clear_layout
+
+        if not vpn_engine.status().running:
+            clear_layout(self.conn_layout)
+            self.conn_layout.addWidget(faint_label(
+                "VPN выключен — смотреть нечего. Включите его и откройте "
+                "любую программу из списка."
+            ))
+            return
+
+        self.btn_conn.setEnabled(False)
+        self.conn_spinner.start()
+        worker = Worker(self)
+        worker.finished.connect(self._show_connections)
+        worker.failed.connect(self._connections_failed)
+        worker.run(vpn_engine.routed_connections)
+        self._conn_worker = worker
+
+    def _connections_failed(self, message: str) -> None:
+        self.btn_conn.setEnabled(True)
+        self.conn_spinner.stop()
+        self.context.error(f"Не удалось получить соединения: {message}")
+
+    def _show_connections(self, rows) -> None:
+        from app.ui.widgets import clear_layout
+
+        self.btn_conn.setEnabled(True)
+        self.conn_spinner.stop()
+        clear_layout(self.conn_layout)
+
+        if not rows:
+            self.conn_layout.addWidget(faint_label(
+                "Активных соединений нет. Откройте программу и нажмите ещё раз."
+            ))
+            return
+
+        seen = set()
+        shown = 0
+        for row in rows:
+            key = (row["process"], row["outbound"])
+            if key in seen:
+                continue
+            seen.add(key)
+            shown += 1
+            if shown > 14:
+                break
+
+            line = QWidget(self.conn_host)
+            layout = QHBoxLayout(line)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(10)
+
+            name = QLabel(row["process"], line)
+            name.setStyleSheet("font-weight: 600;")
+            name.setFixedWidth(160)
+            layout.addWidget(name)
+
+            target = faint_label(row["target"], wrap=False)
+            layout.addWidget(target, 1)
+
+            through_vpn = row["outbound"] not in ("direct", "?", "")
+            badge = Badge(
+                "через VPN" if through_vpn else "напрямую",
+                "accent" if through_vpn else "neutral",
+            )
+            layout.addWidget(badge)
+            self.conn_layout.addWidget(line)
 
     # --- страница --------------------------------------------------------
 

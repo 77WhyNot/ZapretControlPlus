@@ -45,6 +45,12 @@ DEFAULTS: dict[str, Any] = {
     "vpn_apps": [],               # программы, которым нужен туннель
     "vpn_direct_apps": [],        # программы в обход туннеля
     "vpn_stack": "mixed",         # стек TUN: mixed | system | gvisor
+    "vpn_strict_route": False,    # жёсткий перехват маршрута
+    "vpn_ipv6": False,            # пускать IPv6 в туннель
+    "vpn_mtu": 9000,
+    "vpn_dns_through_tunnel": True,   # DNS проксируемых доменов — через туннель
+    "vpn_dns_server": "1.1.1.1",
+    "vpn_bypass_lan": True,       # локальная сеть всегда напрямую
     "vpn_autostart": False,
     "vpn_auto_exclude": True,     # адреса серверов — в исключения zapret
     "vpn_managed_excludes": [],
