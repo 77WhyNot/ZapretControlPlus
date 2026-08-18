@@ -50,7 +50,9 @@ def clear_layout(layout) -> None:
         item = layout.takeAt(0)
         widget = item.widget()
         if widget is not None:
-            widget.setParent(None)
+            # setParent(None) здесь нельзя: Qt делает виджет отдельным окном,
+            # и до отложенного удаления он успевает мигнуть на экране.
+            widget.hide()
             widget.deleteLater()
             continue
         child = item.layout()

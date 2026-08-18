@@ -41,8 +41,10 @@ class CheckRow(QWidget):
     """Результат одной проверки с кнопкой исправления."""
 
     def __init__(self, context: AppContext, result: diag.CheckResult,
-                 page: "DiagnosticsPage") -> None:
-        super().__init__()
+                 page: "DiagnosticsPage",
+                 parent: QWidget | None = None) -> None:
+        # Без родителя виджет до вставки в компоновку считается окном.
+        super().__init__(parent)
         self.context = context
         self.result = result
         self.page = page
@@ -113,12 +115,14 @@ class CheckRow(QWidget):
 
 
 class DiagnosticsPage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "Диагностика",
             "Проверяем всё, что обычно мешает обходу работать: службы, "
             "драйверы, конкурирующие программы и настройки сети.",
+            parent,
         )
         self._ran_once = False
         self._build_summary()
@@ -225,8 +229,10 @@ class DiagnosticsPage(Page):
         )
         for index, result in enumerate(ordered):
             if index:
-                self.results_layout.addWidget(Divider())
-            self.results_layout.addWidget(CheckRow(self.context, result, self))
+                self.results_layout.addWidget(Divider(self.results_card))
+            self.results_layout.addWidget(
+                CheckRow(self.context, result, self, self.results_card)
+            )
         self.results_card.setVisible(bool(ordered))
 
         passed, warnings, errors = diag.summarize(results)

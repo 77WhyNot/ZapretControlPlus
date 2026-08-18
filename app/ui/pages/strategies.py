@@ -88,8 +88,10 @@ class StrategyRow(QWidget):
     """Одна строка в списке стратегий."""
 
     def __init__(self, context: AppContext, strategy: Strategy,
-                 page: "StrategiesPage") -> None:
-        super().__init__()
+                 page: "StrategiesPage", parent: QWidget | None = None) -> None:
+        # Родителя передаём сразу: виджет без родителя до вставки в
+        # компоновку считается окном и может мигнуть на экране.
+        super().__init__(parent)
         self.context = context
         self.strategy = strategy
         self.page = page
@@ -156,14 +158,17 @@ class StrategyRow(QWidget):
 
 
 class StrategiesPage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "Стратегии",
             "Стратегия — это набор приёмов обмана DPI. У разных провайдеров "
             "работают разные варианты, поэтому их и много.",
+            parent,
         )
         self._rows: list[StrategyRow] = []
+        self._rows_signature: tuple = ()
         self._tester: autotest.AutoTester | None = None
         self._auto_worker: Worker | None = None
 
@@ -496,7 +501,7 @@ class StrategiesPage(Page):
     def _change_game_filter(self) -> None:
         mode = str(self.game_box.currentData())
         strategies_module.write_game_filter(mode)
-        self._reload_rows()
+        self._reload_rows(force=True)
         self.context.strategies_changed.emit()
         status = self.context.status
         if status.running:
@@ -532,15 +537,25 @@ class StrategiesPage(Page):
         self.body.addWidget(card)
         self._reload_rows()
 
-    def _reload_rows(self) -> None:
+    def _reload_rows(self, force: bool = False) -> None:
+        items = self.context.load_strategies()
+        signature = tuple(item.id for item in items) + (
+            self.context.current_game_filter(),
+        )
+        # 21 строка со значками строится заметно долго, а меняется редко —
+        # пересобираем только когда список стратегий или фильтр изменились.
+        if not force and signature == self._rows_signature and self._rows:
+            self._mark_running()
+            return
+        self._rows_signature = signature
+
         clear_layout(self.list_layout)
         self._rows = []
 
-        items = self.context.load_strategies()
         for index, strategy in enumerate(items):
             if index:
-                self.list_layout.addWidget(Divider())
-            row = StrategyRow(self.context, strategy, self)
+                self.list_layout.addWidget(Divider(self.list_container))
+            row = StrategyRow(self.context, strategy, self, self.list_container)
             self.list_layout.addWidget(row)
             self._rows.append(row)
         self._mark_running()

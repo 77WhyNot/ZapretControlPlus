@@ -17,9 +17,9 @@ sys.path.insert(0, str(ROOT / "build"))
 from make_icon import build_icon  # noqa: E402
 
 SIZE = (1280, 420)
-TOP = (8, 12, 18)
-BOTTOM = (12, 62, 74)
-RUBY = (34, 198, 216)
+TOP = (16, 8, 14)
+BOTTOM = (96, 12, 40)
+RUBY = (212, 34, 80)
 
 TARGET = ROOT / "docs" / "banner.png"
 
@@ -84,12 +84,12 @@ def build() -> Image.Image:
     draw.text(
         (left, 232),
         "Обход блокировок, VPN и Smart DNS в одном окне",
-        font=sub_font, fill=(206, 232, 238),
+        font=sub_font, fill=(240, 212, 220),
     )
     draw.text(
         (left, 286),
         "zapret · VPN по приложениям · Telegram · xbox-dns",
-        font=small_font, fill=(150, 196, 208),
+        font=small_font, fill=(206, 158, 174),
     )
     return canvas.convert("RGB")
 

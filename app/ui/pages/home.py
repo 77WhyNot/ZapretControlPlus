@@ -38,12 +38,14 @@ from app.ui.widgets import (
 
 
 class HomePage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "Маршруты",
             "Три пути наружу. Напрямую идёт всё, что не отправлено в туннель, "
             "и там его подхватывает zapret.",
+            parent,
         )
         self._busy_zapret = False
         self._busy_vpn = False
@@ -472,7 +474,7 @@ class HomePage(Page):
         for item in results:
             # Каждая строка — отдельный виджет, а не вложенная компоновка:
             # компоновки при очистке не удалялись и наезжали друг на друга.
-            row = QWidget()
+            row = QWidget(self)
             line = QHBoxLayout(row)
             line.setContentsMargins(0, 0, 0, 0)
             line.setSpacing(9)

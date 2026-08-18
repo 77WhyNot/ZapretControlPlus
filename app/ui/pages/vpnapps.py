@@ -129,12 +129,14 @@ class AppCard(QFrame):
 
 
 class VpnAppsPage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "Приложения",
             "Кому идти через VPN, а кому напрямую. Всё, что не в туннеле, "
             "выходит обычным путём — там его подхватывает zapret.",
+            parent,
         )
         self._cards: list[AppCard] = []
         self._entries: list[AppEntry] = []
@@ -333,7 +335,8 @@ class VpnAppsPage(Page):
         lane = self._lane_token()
 
         for index, entry in enumerate(self._entries):
-            card = AppCard(self.context, entry, entry.key in selected, lane)
+            card = AppCard(self.context, entry, entry.key in selected,
+                           lane, self.grid_host)
             card.toggled.connect(self._on_card_toggled)
             card.setEnabled(mode != vpn_config.MODE_ALL)
             self.grid.addWidget(card, index // CARD_COLUMNS, index % CARD_COLUMNS)
