@@ -723,9 +723,15 @@ class HomePage(Page):
                 # Иначе zapret порежет трафик до самого VPN-сервера.
                 if auto_exclude:
                     integration.sync_excludes(servers)
-                vpn_engine.start(servers, selected, mode, vpn_apps, direct_apps, stack)
+                vpn_engine.on_progress = lambda text: worker.progress.emit(text, 0)
+                try:
+                    vpn_engine.start(servers, selected, mode, vpn_apps,
+                                     direct_apps, stack)
+                finally:
+                    vpn_engine.on_progress = None
 
             worker = Worker(self)
+            worker.progress.connect(lambda text, _v: self.state_detail.setText(text))
             worker.finished.connect(lambda _: self._vpn_done("VPN включён"))
             worker.failed.connect(lambda msg: self._vpn_done(msg, error=True))
             worker.run(job)
