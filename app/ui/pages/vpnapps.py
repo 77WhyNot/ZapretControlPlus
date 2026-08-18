@@ -190,6 +190,9 @@ class VpnAppsPage(Page):
         self._reload_cards()
         self._update_summary()
         self.context.ok(f"Режим: {vpn_config.MODE_LABELS[mode]}")
+        # Режим маршрутизации зашит в конфиг движка — без перезапуска
+        # изменение просто не применится, а человек будет думать, что оно есть.
+        self._restart_if_running("Режим изменён")
 
     def _sync_mode(self) -> None:
         mode = self._current_mode()
@@ -351,6 +354,34 @@ class VpnAppsPage(Page):
         self._filter(self.search.text())
         self._update_summary()
 
+    def _restart_if_running(self, reason: str) -> None:
+        """Перезапустить туннель, чтобы новые правила вступили в силу."""
+        from app.core.vpn.engine import vpn_engine
+        from app.ui.widgets import Worker
+
+        if not vpn_engine.status().running:
+            return
+        if getattr(self, "_restart_worker", None) is not None \
+                and self._restart_worker.busy():
+            return
+
+        self.context.ok(f"{reason} — перезапускаю VPN…")
+        servers = self.context.servers()
+        selected = self.context.selected_server()
+        mode = str(config.get("vpn_mode", vpn_config.MODE_SELECTED))
+        vpn_apps = list(config.get("vpn_apps", []) or [])
+        direct_apps = list(config.get("vpn_direct_apps", []) or [])
+        stack = str(config.get("vpn_stack", vpn_config.STACK_DEFAULT))
+
+        def job():
+            vpn_engine.start(servers, selected, mode, vpn_apps, direct_apps, stack)
+
+        worker = Worker(self)
+        worker.finished.connect(lambda _: self.context.ok("VPN перезапущен"))
+        worker.failed.connect(lambda message: self.context.error(str(message)))
+        worker.run(job)
+        self._restart_worker = worker
+
     def _on_card_toggled(self, process: str, active: bool) -> None:
         key = self._storage_key()
         names = list(config.get(key, []) or [])
@@ -361,6 +392,18 @@ class VpnAppsPage(Page):
             names = [name for name in names if name.lower() != process.lower()]
         config.set(key, apps_module.normalize(names))
         self._update_summary()
+        # Отложенно: человек часто щёлкает несколько программ подряд.
+        timer = getattr(self, "_apply_timer", None)
+        if timer is None:
+            from PySide6.QtCore import QTimer
+
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(
+                lambda: self._restart_if_running("Список программ изменён")
+            )
+            self._apply_timer = timer
+        timer.start(2500)
 
     def _filter(self, text: str) -> None:
         needle = text.strip().lower()

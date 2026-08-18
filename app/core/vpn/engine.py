@@ -43,6 +43,10 @@ class VpnError(RuntimeError):
     pass
 
 
+class _AdapterBusy(RuntimeError):
+    """Адаптер занят зависшим устройством — стоит убрать и повторить."""
+
+
 def singbox_path() -> Path:
     """Рядом с exe в собранном виде, в payload — при запуске из исходников."""
     if paths.is_frozen():
@@ -61,6 +65,63 @@ def _free_port(preferred: int = 9797) -> int:
     return preferred
 
 
+
+def orphan_tunnels() -> list[str]:
+    """Включённые туннельные адаптеры, чей владелец уже не работает.
+
+    Клиент, снятый принудительно, оставляет адаптер включённым, и тот
+    продолжает держать маршрут по умолчанию с нулевой метрикой. Такой
+    маршрут выигрывает у настоящего шлюза, и весь трафик уходит в никуда.
+    """
+    from app.core.vpn import clients as vpn_clients
+
+    if vpn_clients.running_clients():
+        return []  # чужой клиент работает — его адаптер трогать нельзя
+
+    ours = config_module.TUN_NAME.lower()
+    found: list[str] = []
+    for adapter in winapi.list_adapters():
+        if not adapter.up:
+            continue
+        haystack = f"{adapter.name} {adapter.description}".lower()
+        if "sing-tun" not in haystack and "wintun" not in haystack:
+            continue
+        if adapter.name.lower() == ours:
+            continue
+        found.append(adapter.name)
+    return found
+
+
+def set_adapter_enabled(name: str, enabled: bool) -> bool:
+    """Включить или выключить адаптер.
+
+    Устройство не удаляем: чужой клиент должен остаться работоспособным.
+    Пока наш туннель поднят, его брошенный адаптер просто отключён, а на
+    выходе мы возвращаем всё как было — и Happ снова заработает.
+    """
+    code, _ = winapi.run_hidden(
+        ["netsh", "interface", "set", "interface",
+         f"name={name}", f"admin={'enabled' if enabled else 'disabled'}"],
+        timeout=30,
+    )
+    if code == 0:
+        logs.info(
+            f"Адаптер «{name}» {'включён обратно' if enabled else 'временно выключен'}"
+        )
+    return code == 0
+
+
+def cleanup_stale_adapters(only_ours: bool = True) -> list[str]:
+    """Убрать зависшие туннели, мешающие запуску и захватившие маршрут."""
+    removed: list[str] = []
+    if only_ours:
+        return removed
+    for name in orphan_tunnels():
+        if set_adapter_enabled(name, False):
+            removed.append(name)
+    return removed
+
+
 class VpnEngine:
     """Единая точка управления туннелем."""
 
@@ -75,6 +136,7 @@ class VpnEngine:
         self._started_at = 0.0
         self._probe_port = 0
         self._last_output: list[str] = []
+        self._paused_adapters: list[str] = []
         self.on_state_change: Callable[[], None] | None = None
         self.on_progress: Callable[[str], None] | None = None
 
@@ -129,6 +191,32 @@ class VpnEngine:
         direct_apps: list[str] | None = None,
         stack: str = config_module.STACK_DEFAULT,
     ) -> None:
+        try:
+            self._start_once(servers, selected, mode, vpn_apps, direct_apps,
+                             stack, retried=False)
+        except _AdapterBusy:
+            # Зависший адаптер мог остаться от любого клиента на том же движке.
+            cleanup_stale_adapters(only_ours=False)
+            time.sleep(2.0)
+            try:
+                self._start_once(servers, selected, mode, vpn_apps, direct_apps,
+                                 stack, retried=True)
+            except _AdapterBusy:
+                raise VpnError(
+                    "Сетевой адаптер занят зависшим устройством, убрать его "
+                    "не удалось. Помогает перезагрузка компьютера."
+                ) from None
+
+    def _start_once(
+        self,
+        servers: list[Server],
+        selected: str,
+        mode: str,
+        vpn_apps: list[str] | None,
+        direct_apps: list[str] | None,
+        stack: str,
+        retried: bool,
+    ) -> None:
         exe = singbox_path()
         if not exe.exists():
             raise VpnError(
@@ -142,6 +230,15 @@ class VpnEngine:
             raise VpnError("Нужны права администратора: VPN создаёт сетевой адаптер.")
 
         self.stop(quiet=True)
+
+        # Убитый клиент оставляет свой адаптер включённым, и тот продолжает
+        # держать маршруты — наш трафик уходит в него как в чёрную дыру.
+        # Поэтому, если ни один чужой клиент не запущен, чистим все зависшие,
+        # а не только свои.
+        stale = cleanup_stale_adapters(only_ours=False)
+        if stale:
+            self._paused_adapters = stale
+            time.sleep(2.0)
 
         self._port = _free_port(self._port)
         self._probe_port = _free_port(0)
@@ -204,7 +301,11 @@ class VpnEngine:
         notified_slow = False
         while time.time() < deadline:
             if process.poll() is not None:
-                raise VpnError(self._failure_reason())
+                reason = self._failure_reason()
+                if self._adapter_conflict() and not retried:
+                    logs.warn("Адаптер занят, убираю зависшие и пробую снова")
+                    raise _AdapterBusy()
+                raise VpnError(reason)
             if self._clash_alive():
                 self._started_at = time.time()
                 logs.info(f"VPN поднялся за {time.time() - started:.0f} с")
@@ -227,6 +328,12 @@ class VpnEngine:
         raise VpnError(
             f"VPN не поднялся за {START_TIMEOUT} секунд. " + self._failure_reason()
         )
+
+    def _adapter_conflict(self) -> bool:
+        """Движок не смог создать адаптер, потому что такой уже есть."""
+        text = " ".join(self._last_output[-12:]).lower()
+        return ("already exists" in text or "element not found" in text
+                or "configure tun interface" in text)
 
     def _is_slow_interface(self) -> bool:
         """Движок сообщил, что адаптер создаётся долго."""
@@ -267,9 +374,12 @@ class VpnEngine:
         """Куда мир видит наш выход: адрес и страна — через сам туннель."""
         if not self._probe_port:
             raise VpnError("VPN не запущен.")
+        # Вход mixed принимает и HTTP, и SOCKS. Берём HTTP: схему socks5h
+        # библиотека requests без отдельного пакета PySocks не понимает
+        # и падает с InvalidSchema.
         proxies = {
-            "http": f"socks5h://127.0.0.1:{self._probe_port}",
-            "https": f"socks5h://127.0.0.1:{self._probe_port}",
+            "http": f"http://127.0.0.1:{self._probe_port}",
+            "https": f"http://127.0.0.1:{self._probe_port}",
         }
         errors = []
         for url in ("https://ipinfo.io/json", "https://api.ip.sb/geoip",
@@ -369,6 +479,12 @@ class VpnEngine:
         if winapi.kill_processes_by_path(SINGBOX_EXE, str(singbox_path())):
             stopped = True
         self._started_at = 0.0
+
+        # Возвращаем чужие адаптеры, которые выключали на время работы.
+        for name in self._paused_adapters:
+            set_adapter_enabled(name, True)
+        self._paused_adapters = []
+
         if stopped and not quiet:
             logs.info("VPN отключён")
         self._notify()

@@ -48,13 +48,17 @@ DEFAULTS: dict[str, Any] = {
     "vpn_strict_route": False,    # жёсткий перехват маршрута
     "vpn_ipv6": False,            # пускать IPv6 в туннель
     "vpn_mtu": 9000,
-    "vpn_dns_through_tunnel": True,   # DNS проксируемых доменов — через туннель
+    # DNS по умолчанию идёт напрямую. Через туннель он ломает вообще всё,
+    # включая программы вне туннеля: одна заминка прокси — и имена не
+    # разрешаются ни у кого.
+    "vpn_dns_through_tunnel": False,
     "vpn_dns_server": "1.1.1.1",
     "vpn_bypass_lan": True,       # локальная сеть всегда напрямую
     "vpn_autostart": False,
     "vpn_auto_exclude": True,     # адреса серверов — в исключения zapret
     "vpn_managed_excludes": [],
     "vpn_last_update": 0,
+    "vpn_dns_migrated": False,    # разовый перевод DNS на прямой путь
     # Прочее
     "first_run": True,
     "window_geometry": "",
@@ -112,6 +116,13 @@ class Config:
             for key, value in raw.items():
                 if key in DEFAULTS:
                     self._data[key] = value
+
+        # Разовая правка уже сохранённых настроек: DNS через туннель рвал
+        # связь у всех программ сразу, включая те, что идут напрямую.
+        if not self._data.get("vpn_dns_migrated"):
+            self._data["vpn_dns_through_tunnel"] = False
+            self._data["vpn_dns_migrated"] = True
+            self.save()
 
     def save(self) -> None:
         path = paths.config_path()
