@@ -75,15 +75,15 @@ class HomePage(Page):
             "не смогут работать. Перезапустите её от имени администратора.",
             kind="error",
         )
-        self.banner_admin.setVisible(not winapi.is_admin())
         self.body.addWidget(self.banner_admin)
+        self.banner_admin.setVisible(not winapi.is_admin())
 
         self.banner_foreign = Banner(
             self.context, "globe",
             "", kind="warn",
         )
-        self.banner_foreign.setVisible(False)
         self.body.addWidget(self.banner_foreign)
+        self.banner_foreign.setVisible(False)
 
     def _build_rails(self) -> None:
         card = Card(padding=22, spacing=16)

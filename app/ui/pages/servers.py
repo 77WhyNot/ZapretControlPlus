@@ -227,8 +227,8 @@ class ServersPage(Page):
         card.add_layout(row)
 
         self.quota_bar = QProgressBar()
-        self.quota_bar.setVisible(False)
         card.add(self.quota_bar)
+        self.quota_bar.setVisible(False)
 
         self.sub_details = faint_label(
             "Вставьте ссылку из личного кабинета и нажмите «Обновить»."

@@ -299,8 +299,8 @@ class VpnAppsPage(Page):
             "Программы не найдены. Запустите нужную — она появится в списке, "
             "либо добавьте её вручную ниже."
         )
-        self.empty_hint.setVisible(False)
         card.add(self.empty_hint)
+        self.empty_hint.setVisible(False)
 
         self.body.addWidget(card)
 

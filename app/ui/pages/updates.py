@@ -69,8 +69,8 @@ class UpdatesPage(Page):
         card.add_layout(stats)
 
         self.core_progress = QProgressBar()
-        self.core_progress.setVisible(False)
         card.add(self.core_progress)
+        self.core_progress.setVisible(False)
 
         self.core_status = faint_label(
             "Обновление скачивается с GitHub. Ваши списки, исключения и "
@@ -81,8 +81,8 @@ class UpdatesPage(Page):
         self.core_notes = QTextBrowser()
         self.core_notes.setOpenExternalLinks(True)
         self.core_notes.setMaximumHeight(190)
-        self.core_notes.setVisible(False)
         card.add(self.core_notes)
+        self.core_notes.setVisible(False)
 
         controls = QHBoxLayout()
         controls.setSpacing(10)
@@ -242,8 +242,8 @@ class UpdatesPage(Page):
         card.add_layout(stats)
 
         self.app_progress = QProgressBar()
-        self.app_progress.setVisible(False)
         card.add(self.app_progress)
+        self.app_progress.setVisible(False)
 
         self.app_status = faint_label(
             "Новая версия скачивается и устанавливается сама — вручную ничего "
