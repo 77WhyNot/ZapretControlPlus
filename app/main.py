@@ -156,6 +156,17 @@ def main() -> int:
         if splash is not None:
             splash.step(message, value)
 
+    # Если прошлый сеанс закончился падением, чужой сетевой адаптер мог
+    # остаться выключенным. Возвращаем его до всего остального.
+    try:
+        from app.core.vpn.engine import restore_paused_adapters
+
+        restored = restore_paused_adapters()
+        if restored:
+            logs.info("Возвращены сетевые адаптеры: " + ", ".join(restored))
+    except Exception as exc:  # noqa: BLE001
+        logs.warn(f"Не удалось вернуть сетевые адаптеры: {exc}")
+
     step("Проверка файлов ядра…", 0.15)
     if not paths.core_is_valid():
         logs.warn(f"Ядро zapret не найдено в {paths.core_dir()}")

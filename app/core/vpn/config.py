@@ -62,20 +62,25 @@ def build_config(
     for server in servers:
         outbounds.append(dict(server.outbound))
 
-    # Автовыбор по задержке — им же пользуется кнопка «выбрать лучший».
+    # Автовыбор по задержке. Интервал большой намеренно: при переключении
+    # сервера рвутся живые соединения, а частая перепроверка делала это
+    # каждые пять минут — со стороны выглядело как «интернет отваливается».
     if tags:
         outbounds.append({
             "type": "urltest",
             "tag": AUTO_TAG,
             "outbounds": list(tags),
             "url": "https://www.gstatic.com/generate_204",
-            "interval": "5m",
-            "tolerance": 60,
+            "interval": "30m",
+            "tolerance": 150,
+            "interrupt_exist_connections": False,
         })
 
-    selector_options = ([AUTO_TAG] if tags else []) + tags
+    selector_options = tags + ([AUTO_TAG] if tags else [])
     if not selector_options:
         selector_options = [DIRECT_TAG]
+    # По умолчанию — выбранный сервер, а не автогруппа: она переключается
+    # сама и обрывает соединения без ведома пользователя.
     default_choice = selected if selected in selector_options else selector_options[0]
 
     outbounds.append({
@@ -83,7 +88,9 @@ def build_config(
         "tag": PROXY_TAG,
         "outbounds": selector_options,
         "default": default_choice,
-        "interrupt_exist_connections": True,
+        # Не рвём существующие соединения: иначе любое обращение к селектору
+        # обрубает открытые вкладки и звонки.
+        "interrupt_exist_connections": False,
     })
     outbounds.append({"type": "direct", "tag": DIRECT_TAG})
 
