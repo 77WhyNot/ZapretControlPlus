@@ -10,6 +10,7 @@ from app.core import dnsctl
 from app.ui.context import AppContext
 from app.ui.pages.base import Page
 from app.ui.widgets import (
+    clear_layout,
     Badge,
     Button,
     Card,
@@ -138,11 +139,7 @@ class DnsPage(Page):
         self.body.addWidget(card)
 
     def _refresh_adapters(self) -> None:
-        while self.adapters_layout.count():
-            item = self.adapters_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        clear_layout(self.adapters_layout)
 
         adapters = dnsctl.adapters()
         if not adapters:

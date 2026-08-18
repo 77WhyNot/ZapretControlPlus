@@ -3,7 +3,7 @@
 # --- Продукт -------------------------------------------------------------
 APP_NAME = "Zapret Control+"
 APP_ID = "ZapretControlPlus"
-APP_VERSION = "1.0.1"
+APP_VERSION = "2.0.0"
 APP_AUTHOR = "ketamine"
 APP_AUTHOR_FULL = "Ivan Milyaev (ketamine)"
 APP_PUBLISHER = "Ivan Milyaev (ketamine)"

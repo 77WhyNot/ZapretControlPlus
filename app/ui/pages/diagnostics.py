@@ -7,6 +7,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QMessageBox,
     QLabel,
     QPlainTextEdit,
     QVBoxLayout,
@@ -15,9 +16,11 @@ from PySide6.QtWidgets import (
 
 from app.core import diagnostics as diag
 from app.core import logs, paths
+from app.core.vpn import clients as vpn_clients
 from app.ui.context import AppContext
 from app.ui.pages.base import Page, StatusIcon
 from app.ui.widgets import (
+    clear_layout,
     Badge,
     Button,
     Card,
@@ -27,6 +30,11 @@ from app.ui.widgets import (
     faint_label,
     section_label,
 )
+
+
+# Перенос строки для диалогов: держим константой, чтобы не зависеть
+# от того, как разные инструменты обрабатывают экранирование.
+LINE_BREAK = chr(10)
 
 
 class CheckRow(QWidget):
@@ -115,6 +123,7 @@ class DiagnosticsPage(Page):
         self._ran_once = False
         self._build_summary()
         self._build_results()
+        self._build_tools()
         self._build_log()
         self.apply_theme()
 
@@ -208,11 +217,7 @@ class DiagnosticsPage(Page):
         self.spinner.stop()
         self._ran_once = True
 
-        while self.results_layout.count():
-            item = self.results_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        clear_layout(self.results_layout)
 
         ordered = sorted(
             results,
@@ -242,6 +247,127 @@ class DiagnosticsPage(Page):
         else:
             self.summary_text.setText("Всё в порядке — система готова к обходу.")
 
+    # --- инструменты -----------------------------------------------------
+
+    def _build_tools(self) -> None:
+        card = Card(padding=20, spacing=13)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        header.addWidget(section_label("Инструменты"))
+        header.addStretch(1)
+        self.tools_spinner = Spinner(16, self.context.color("accent"))
+        header.addWidget(self.tools_spinner)
+        card.add_layout(header)
+
+        card.add(faint_label(
+            "Discord держит адреса голосовых серверов в кэше и после смены "
+            "стратегии продолжает стучаться по старым. Перезапуск с очисткой "
+            "чаще всего и чинит неработающий голос."
+        ))
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.btn_discord_restart = Button("Перезапустить Discord", variant="soft")
+        self.btn_discord_restart.clicked.connect(
+            lambda: self._run_tool(diag.restart_discord_clean,
+                                   self.btn_discord_restart)
+        )
+        row.addWidget(self.btn_discord_restart)
+
+        self.btn_discord_cache = Button("Только очистить кэш")
+        self.btn_discord_cache.clicked.connect(
+            lambda: self._run_tool(diag.clear_discord_cache, self.btn_discord_cache)
+        )
+        row.addWidget(self.btn_discord_cache)
+
+        self.btn_discord_start = Button("Запустить Discord", variant="ghost")
+        self.btn_discord_start.clicked.connect(
+            lambda: self._run_tool(diag.launch_discord, self.btn_discord_start)
+        )
+        row.addWidget(self.btn_discord_start)
+        row.addStretch(1)
+        card.add_layout(row)
+
+        card.add(Divider())
+
+        self.clients_label = faint_label("")
+        card.add(self.clients_label)
+
+        clients_row = QHBoxLayout()
+        clients_row.setSpacing(10)
+        self.btn_stop_clients = Button("Закрыть чужие VPN-клиенты", variant="soft")
+        self.btn_stop_clients.clicked.connect(self._stop_clients)
+        clients_row.addWidget(self.btn_stop_clients)
+
+        self.btn_flush_dns = Button("Сбросить кэш DNS", variant="ghost")
+        self.btn_flush_dns.clicked.connect(
+            lambda: self._run_tool(self._flush_dns, self.btn_flush_dns)
+        )
+        clients_row.addWidget(self.btn_flush_dns)
+        clients_row.addStretch(1)
+        card.add_layout(clients_row)
+
+        self.body.addWidget(card)
+        self._refresh_clients()
+
+    def _flush_dns(self) -> str:
+        from app.core import dnsctl
+
+        return ("Кэш DNS очищен." if dnsctl.flush_cache()
+                else "Не удалось очистить кэш DNS.")
+
+    def _refresh_clients(self) -> None:
+        found = vpn_clients.running_clients()
+        if found:
+            names = ", ".join(item.title for item in found)
+            self.clients_label.setText(
+                f"Сейчас запущены сторонние VPN-клиенты: {names}. "
+                "Два туннеля одновременно конфликтуют — закройте их, "
+                "прежде чем включать VPN здесь."
+            )
+            self.btn_stop_clients.setEnabled(True)
+        else:
+            self.clients_label.setText("Сторонних VPN-клиентов не запущено.")
+            self.btn_stop_clients.setEnabled(False)
+
+    def _stop_clients(self) -> None:
+        found = vpn_clients.running_clients()
+        if not found:
+            self._refresh_clients()
+            return
+        names = ", ".join(item.title for item in found)
+        answer = QMessageBox.question(
+            self, "Закрыть чужие клиенты",
+            f"Будут принудительно закрыты: {names}."
+            + LINE_BREAK * 2 +
+            
+            "Их туннели отключатся, несохранённые данные в этих программах "
+            "могут потеряться. Продолжить?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._run_tool(lambda: vpn_clients.stop_all(found), self.btn_stop_clients)
+
+    def _run_tool(self, function, button) -> None:
+        button.setEnabled(False)
+        self.tools_spinner.start()
+
+        worker = Worker(self)
+        worker.finished.connect(lambda result: self._tool_done(str(result), button))
+        worker.failed.connect(lambda message: self._tool_done(message, button, True))
+        worker.run(function)
+        self._tool_worker = worker
+
+    def _tool_done(self, message: str, button, error: bool = False) -> None:
+        button.setEnabled(True)
+        self.tools_spinner.stop()
+        (self.context.error if error else self.context.ok)(message)
+        self._refresh_clients()
+
+
     # --- журнал ----------------------------------------------------------
 
     def _reload_log(self) -> None:
@@ -263,6 +389,7 @@ class DiagnosticsPage(Page):
     # --- страница --------------------------------------------------------
 
     def on_activate(self) -> None:
+        self._refresh_clients()
         from app.core.config import config
 
         if not self._ran_once and config.get("diagnostics_autorun", True):
@@ -270,3 +397,4 @@ class DiagnosticsPage(Page):
 
     def apply_theme(self) -> None:
         self.spinner.set_color(self.context.color("accent"))
+        self.tools_spinner.set_color(self.context.color("accent"))

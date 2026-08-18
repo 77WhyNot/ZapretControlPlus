@@ -24,6 +24,7 @@ from app.core.strategies import GAME_FILTER_LABELS, Strategy
 from app.ui.context import AppContext
 from app.ui.pages.base import Page
 from app.ui.widgets import (
+    clear_layout,
     Badge,
     Button,
     Card,
@@ -293,11 +294,7 @@ class StrategiesPage(Page):
         self.context.refresh_status(force=True)
 
     def _clear_auto_results(self) -> None:
-        while self.auto_results_layout.count():
-            item = self.auto_results_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        clear_layout(self.auto_results_layout)
 
     def _auto_finished(self, payload) -> None:
         self._finish_autopick()
@@ -536,11 +533,7 @@ class StrategiesPage(Page):
         self._reload_rows()
 
     def _reload_rows(self) -> None:
-        while self.list_layout.count():
-            item = self.list_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        clear_layout(self.list_layout)
         self._rows = []
 
         items = self.context.load_strategies()

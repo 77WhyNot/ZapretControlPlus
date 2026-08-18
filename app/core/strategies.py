@@ -205,11 +205,35 @@ def _natural_key(name: str) -> list[object]:
     ]
 
 
+_cache: dict[tuple, list[Strategy]] = {}
+
+
+def invalidate_cache() -> None:
+    _cache.clear()
+
+
 def load_strategies(game_filter: str = "off") -> list[Strategy]:
-    """Все стратегии из папки ядра (service*.bat игнорируются)."""
+    """Все стратегии из папки ядра (service*.bat игнорируются).
+
+    Разбор 21 файла заметен на глаз, а вызывается он при каждом открытии
+    страницы — поэтому результат кэшируется до изменения файлов.
+    """
     core = paths.core_dir()
     if not core.is_dir():
         return []
+
+    try:
+        signature = tuple(sorted(
+            (path.name, path.stat().st_mtime_ns)
+            for path in core.glob("*.bat")
+        ))
+    except OSError:
+        signature = ()
+    key = (game_filter, signature)
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached
+
     found: list[Strategy] = []
     for path in sorted(core.glob("*.bat"), key=lambda p: _natural_key(p.name)):
         if path.name.lower().startswith("service"):
@@ -218,6 +242,8 @@ def load_strategies(game_filter: str = "off") -> list[Strategy]:
             found.append(parse_strategy(path, game_filter))
         except (StrategyError, OSError):
             continue
+    _cache.clear()
+    _cache[key] = found
     return found
 
 

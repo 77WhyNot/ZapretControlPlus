@@ -23,6 +23,7 @@ from app.ui import appicons
 from app.ui.context import AppContext
 from app.ui.pages.base import Page
 from app.ui.widgets import (
+    clear_layout,
     Badge,
     Button,
     Card,
@@ -324,11 +325,7 @@ class VpnAppsPage(Page):
         self.btn_refresh.setEnabled(True)
         self._entries = list(entries)
 
-        while self.grid.count():
-            item = self.grid.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        clear_layout(self.grid)
         self._cards = []
 
         mode = self._current_mode()
