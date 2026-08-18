@@ -5,10 +5,20 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QByteArray, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QByteArray,
+    QEasingCurve,
+    QPoint,
+    QRect,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QAction, QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QGraphicsOpacityEffect,
     QButtonGroup,
     QHBoxLayout,
     QLabel,
@@ -181,8 +191,9 @@ class NavButton(QPushButton):
 
 
 class MainWindow(QWidget):
-    def __init__(self) -> None:
+    def __init__(self, on_progress=None) -> None:
         super().__init__()
+        self._on_progress = on_progress or (lambda text, value: None)
         self.context = AppContext()
         self._force_quit = False
 
@@ -250,6 +261,14 @@ class MainWindow(QWidget):
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
         self.nav_buttons: dict[str, NavButton] = {}
+
+        # Полоска, которая едет к выбранному пункту.
+        self.nav_marker = QWidget(self.sidebar)
+        self.nav_marker.setFixedWidth(3)
+        self.nav_marker.hide()
+        self._marker_animation = QPropertyAnimation(self.nav_marker, b"geometry", self)
+        self._marker_animation.setDuration(220)
+        self._marker_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         self.pages = QStackedWidget(body)
         self.pages.setObjectName("Content")
@@ -329,6 +348,11 @@ class MainWindow(QWidget):
             self.setUpdatesEnabled(True)
         for button in self.nav_buttons.values():
             button.apply_theme()
+        marker = getattr(self, 'nav_marker', None)
+        if marker is not None and marker.isVisible():
+            marker.setStyleSheet(
+                f"background: {self.context.color('accent')}; border-radius: 1px;"
+            )
         self._update_window_icon()
 
     def _update_window_icon(self) -> None:
@@ -345,29 +369,79 @@ class MainWindow(QWidget):
     # --- навигация -------------------------------------------------------
 
     def ensure_page(self, key: str) -> QWidget | None:
-        """Создать страницу, если её ещё нет."""
+        """Создать страницу, если её ещё нет.
+
+        Родителем сразу назначаем контейнер страниц: виджет без родителя Qt
+        считает окном и успевает мигнуть им на экране при первом открытии.
+        """
         widget = self.page_widgets.get(key)
         if widget is not None:
             return widget
         factory = self._factories.get(key)
         if factory is None:
             return None
-        widget = factory(self.context)
+        widget = factory(self.context, self.pages)
+        widget.hide()
         self.page_widgets[key] = widget
         self.pages.addWidget(widget)
         return widget
+
+    def build_all_pages(self) -> None:
+        """Собрать все страницы заранее — под заставкой, а не при первом клике."""
+        total = len(PAGES)
+        for index, (key, title, _icon) in enumerate(PAGES, start=1):
+            self._on_progress(f"Готовим «{title}»…", 0.45 + 0.5 * index / total)
+            self.ensure_page(key)
 
     def show_page(self, key: str) -> None:
         widget = self.ensure_page(key)
         if widget is None:
             return
+        changed = self.pages.currentWidget() is not widget
         self.pages.setCurrentWidget(widget)
+        if changed:
+            self._fade_in(widget)
         for nav_key, button in self.nav_buttons.items():
             button.setChecked(nav_key == key)
             button.apply_theme()
+        self._move_marker(key)
         activate = getattr(widget, "on_activate", None)
         if callable(activate):
             activate()
+
+    def _move_marker(self, key: str) -> None:
+        """Подвинуть полоску к выбранному пункту меню."""
+        button = self.nav_buttons.get(key)
+        if button is None:
+            return
+        target = QRect(2, button.y() + 8, 3, max(button.height() - 16, 8))
+        self.nav_marker.setStyleSheet(
+            f"background: {self.context.color('accent')}; border-radius: 1px;"
+        )
+        if not self.nav_marker.isVisible():
+            self.nav_marker.setGeometry(target)
+            self.nav_marker.show()
+            self.nav_marker.raise_()
+            return
+        self._marker_animation.stop()
+        self._marker_animation.setStartValue(self.nav_marker.geometry())
+        self._marker_animation.setEndValue(target)
+        self._marker_animation.start()
+        self.nav_marker.raise_()
+
+    def _fade_in(self, widget: QWidget) -> None:
+        """Короткое проявление страницы вместо резкой подмены."""
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b"opacity", widget)
+        animation.setDuration(140)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Эффект снимаем сразу после показа: он рисует виджет через буфер
+        # и без нужды замедляет прокрутку.
+        animation.finished.connect(lambda: widget.setGraphicsEffect(None))
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     # --- окно ------------------------------------------------------------
 

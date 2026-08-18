@@ -147,13 +147,13 @@ class AccentDef:
 
 
 ACCENTS: tuple[AccentDef, ...] = (
-    AccentDef("cyan", "Бирюзовый путь", "#22C6D8", "#3AD6E6", "#17A6B6", "#04131A"),
-    AccentDef("ruby", "Рубин", "#C41E4A", "#D82B58", "#A4173C"),
+    AccentDef("ruby", "Рубин", "#D42250", "#E63862", "#B01840"),
+    AccentDef("cyan", "Бирюза", "#22C6D8", "#3AD6E6", "#17A6B6", "#04131A"),
     AccentDef("amber", "Янтарь", "#CF7211", "#E28320", "#AC5D0B"),
     AccentDef("emerald", "Изумруд", "#0E9F6E", "#16B27D", "#0A8159"),
     AccentDef("sapphire", "Сапфир", "#2563EB", "#3B76F0", "#1D4FC4"),
     AccentDef("violet", "Аметист", "#7C3AED", "#8C4FF2", "#672FC7"),
-    AccentDef("teal", "Бирюза", "#0D8E93", "#12A2A8", "#0A7276"),
+    AccentDef("teal", "Морская волна", "#0D8E93", "#12A2A8", "#0A7276"),
     AccentDef("graphite", "Графит", "#4A5567", "#5A6678", "#3A4353"),
 )
 
@@ -230,7 +230,7 @@ def build_tokens(theme_key: str, accent_key: str) -> dict[str, str]:
     # Цвета маршрутов — это не украшение, а способ читать состояние:
     # один и тот же цвет означает один и тот же путь трафика во всей программе.
     tokens["lane_direct"] = "#7C8AA0" if theme.dark else "#68758A"
-    tokens["lane_zapret"] = "#E0284F" if theme.dark else "#C41E4A"
+    tokens["lane_zapret"] = "#E63862" if theme.dark else "#C41E4A"
     tokens["lane_vpn"] = "#22C6D8" if theme.dark else "#0E93A6"
     tokens["lane_direct_soft"] = mix(theme.colors["surface"], tokens["lane_direct"],
                                      0.18 if theme.dark else 0.12)

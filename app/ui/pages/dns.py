@@ -94,12 +94,14 @@ class PresetCard(QFrame):
 
 
 class DnsPage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "DNS",
             "Smart DNS отдаёт другой адрес сервисам, которые режут доступ по "
             "стране. Работает вместе с zapret и не мешает VPN.",
+            parent,
         )
         self._cards: list[PresetCard] = []
         self._busy = False
@@ -149,7 +151,7 @@ class DnsPage(Page):
             return
 
         for adapter in adapters:
-            line = QWidget()
+            line = QWidget(self.adapters_host)
             row = QHBoxLayout(line)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(10)

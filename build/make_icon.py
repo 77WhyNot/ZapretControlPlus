@@ -1,4 +1,4 @@
-"""Генерация иконки приложения: бирюзовый щит с рельсами маршрутов.
+"""Генерация иконки приложения: рубиновый щит с рельсами маршрутов.
 
 Запуск: python build/make_icon.py
 Результат: app/resources/icon.ico (+ icon.png для README и страницы GitHub).
@@ -11,8 +11,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 SIZE = 1024
-RUBY_LIGHT = (52, 214, 230)
-RUBY_DARK = (14, 124, 140)
+RUBY_LIGHT = (222, 46, 92)
+RUBY_DARK = (150, 18, 55)
 OUTPUT_SIZES = (16, 20, 24, 32, 48, 64, 128, 256)
 
 ROOT = Path(__file__).resolve().parents[1]

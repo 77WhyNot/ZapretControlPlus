@@ -127,11 +127,13 @@ class AccentDot(QWidget):
 
 
 class SettingsPage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "Настройки",
             "Внешний вид, поведение при запуске и параметры сети.",
+            parent,
         )
         self._switches: list[Switch] = []
         self._build_appearance()

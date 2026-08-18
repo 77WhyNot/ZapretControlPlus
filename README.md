@@ -2,8 +2,8 @@
 
 <img src="docs/banner.png" alt="Zapret Control+">
 
-[![Релиз](https://img.shields.io/github/v/release/77WhyNot/ZapretControlPlus?style=for-the-badge&label=версия&color=22C6D8)](https://github.com/77WhyNot/ZapretControlPlus/releases/latest)
-[![Загрузки](https://img.shields.io/github/downloads/77WhyNot/ZapretControlPlus/total?style=for-the-badge&label=загрузок&color=22C6D8)](https://github.com/77WhyNot/ZapretControlPlus/releases)
+[![Релиз](https://img.shields.io/github/v/release/77WhyNot/ZapretControlPlus?style=for-the-badge&label=версия&color=D42250)](https://github.com/77WhyNot/ZapretControlPlus/releases/latest)
+[![Загрузки](https://img.shields.io/github/downloads/77WhyNot/ZapretControlPlus/total?style=for-the-badge&label=загрузок&color=D42250)](https://github.com/77WhyNot/ZapretControlPlus/releases)
 [![Windows](https://img.shields.io/badge/Windows-10%20и%2011-0078D4?style=for-the-badge)](https://github.com/77WhyNot/ZapretControlPlus/releases/latest)
 [![Лицензия](https://img.shields.io/badge/лицензия-проприетарная-555?style=for-the-badge)](LICENSE)
 

@@ -172,12 +172,14 @@ class ServerRow(QWidget):
 
 
 class ServersPage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "Серверы",
             "Список приходит из вашей подписки. Ссылка хранится только на этом "
             "компьютере и никуда не отправляется.",
+            parent,
         )
         self._servers: list[Server] = []
         self._info = subscription.SubscriptionInfo()
@@ -368,11 +370,12 @@ class ServersPage(Page):
         active = str(config.get("vpn_selected_server", ""))
         for index, server in enumerate(self._servers):
             if index:
-                self.rows_layout.addWidget(Divider())
+                self.rows_layout.addWidget(Divider(self.rows_host))
             row = ServerRow(
                 self.context, server,
                 self._latency.get(server.name, -1),
                 server.name == active,
+                self.rows_host,
             )
             row.chosen.connect(self._select_server)
             self.rows_layout.addWidget(row)

@@ -165,7 +165,10 @@ def main() -> int:
     step("Сборка интерфейса…", 0.45)
     from app.ui.window import MainWindow
 
-    window = MainWindow()
+    window = MainWindow(on_progress=step)
+    # Собираем все страницы сразу: иначе первое открытие каждой вкладки
+    # заметно подвисает, а недостроенные виджеты мигают отдельными окнами.
+    window.build_all_pages()
 
     step("Готово", 1.0)
     server = _start_ipc_server(window)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QWidget,
     QButtonGroup,
     QComboBox,
     QHBoxLayout,
@@ -26,12 +27,14 @@ from app.ui.widgets import (
 
 
 class ListsPage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "Списки",
             "Что обходить, а что трогать не нужно. Изменения применяются "
             "после перезапуска обхода.",
+            parent,
         )
         self._current_key = lists_module.USER_LISTS[0].key
         self._dirty = False

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QHBoxLayout, QMessageBox, QProgressBar, QTextBrowser
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QMessageBox, QProgressBar, QTextBrowser
 
 from app.core import net, updater
 from app.core.config import config
@@ -27,12 +27,14 @@ from app.ui.widgets import (
 
 
 class UpdatesPage(Page):
-    def __init__(self, context: AppContext) -> None:
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
         super().__init__(
             context,
             "Обновления",
             "Стратегии обхода живут недолго: провайдеры подстраиваются, и "
             "авторы zapret выпускают новые версии. Держите ядро свежим.",
+            parent,
         )
         self._core_info: updater.UpdateInfo | None = None
         self._app_info: updater.UpdateInfo | None = None

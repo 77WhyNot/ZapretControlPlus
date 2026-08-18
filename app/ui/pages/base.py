@@ -19,8 +19,11 @@ from app.ui.widgets import Button, IconLabel
 class Page(QWidget):
     """Общий каркас страницы."""
 
-    def __init__(self, context: AppContext, title: str, subtitle: str = "") -> None:
-        super().__init__()
+    def __init__(self, context: AppContext, title: str, subtitle: str = "",
+                 parent: QWidget | None = None) -> None:
+        # Родитель обязателен с самого начала: виджет без родителя Qt
+        # считает окном и успевает мигнуть им на экране.
+        super().__init__(parent)
         self.context = context
 
         outer = QVBoxLayout(self)

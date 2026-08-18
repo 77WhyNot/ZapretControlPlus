@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QWidget, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout
 
 from app.core import paths, strategies
 from app.core.constants import (
@@ -29,8 +29,9 @@ from app.ui.widgets import (
 
 
 class AboutPage(Page):
-    def __init__(self, context: AppContext) -> None:
-        super().__init__(context, "О программе")
+    def __init__(self, context: AppContext,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(context, "О программе", "", parent)
 
         self._build_hero()
         self._build_how()

@@ -13,7 +13,7 @@ DEFAULTS: dict[str, Any] = {
     "config_version": CONFIG_VERSION,
     # Внешний вид
     "theme": "rails",             # см. ui/theme.py
-    "accent": "cyan",
+    "accent": "ruby",
     # Поведение
     "run_mode": "service",        # service | process
     "last_strategy": "general",
