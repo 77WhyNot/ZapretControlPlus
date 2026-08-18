@@ -24,6 +24,8 @@ from app.core.vpn import config as config_module
 from app.core.vpn.links import Server
 
 SINGBOX_EXE = "sing-box.exe"
+# Wintun на Windows создаётся долго, особенно если адаптер уже был занят.
+START_TIMEOUT = 75
 CLASH_TIMEOUT = 4
 DELAY_URL = "https://www.gstatic.com/generate_204"
 
@@ -74,6 +76,7 @@ class VpnEngine:
         self._probe_port = 0
         self._last_output: list[str] = []
         self.on_state_change: Callable[[], None] | None = None
+        self.on_progress: Callable[[str], None] | None = None
 
     # --- состояние -------------------------------------------------------
 
@@ -191,23 +194,44 @@ class VpnEngine:
             self._selected = selected
             self._mode = mode
 
+        started = time.time()
         threading.Thread(target=self._pump, args=(process,), daemon=True).start()
 
-        # Ждём, пока поднимется управляющий интерфейс.
-        deadline = time.time() + 12
+        # Создание адаптера Wintun на Windows нередко занимает 20-40 секунд:
+        # сам движок пишет об этом «open interface take too much time».
+        # Пока процесс жив, обрывать его нельзя — он ещё поднимается.
+        deadline = time.time() + START_TIMEOUT
+        notified_slow = False
         while time.time() < deadline:
             if process.poll() is not None:
                 raise VpnError(self._failure_reason())
             if self._clash_alive():
                 self._started_at = time.time()
+                logs.info(f"VPN поднялся за {time.time() - started:.0f} с")
                 self._notify()
                 return
-            time.sleep(0.4)
+            if not notified_slow and time.time() - started > 10:
+                notified_slow = True
+                if self._is_slow_interface():
+                    logs.info(
+                        "Windows долго создаёт сетевой адаптер — это нормально, ждём"
+                    )
+                    if self.on_progress is not None:
+                        self.on_progress(
+                            "Windows создаёт сетевой адаптер. При первом запуске "
+                            "это занимает до минуты…"
+                        )
+            time.sleep(0.5)
 
         self.stop(quiet=True)
         raise VpnError(
-            "VPN не поднялся за 12 секунд. " + self._failure_reason()
+            f"VPN не поднялся за {START_TIMEOUT} секунд. " + self._failure_reason()
         )
+
+    def _is_slow_interface(self) -> bool:
+        """Движок сообщил, что адаптер создаётся долго."""
+        text = " ".join(self._last_output[-12:]).lower()
+        return "take too much time" in text or "open interface" in text
 
     def _failure_reason(self) -> str:
         """Настоящая причина из вывода движка, а не общая фраза."""
@@ -215,6 +239,9 @@ class VpnEngine:
         hints = (
             ("permission denied", "Нет прав на создание сетевого адаптера. "
                                   "Запустите программу от имени администратора."),
+            ("take too much time", "Windows слишком долго создаёт сетевой адаптер. "
+                                   "Обычно помогает перезагрузка: в системе остался "
+                                   "висеть адаптер от другого VPN-клиента."),
             ("wintun", "Не удалось загрузить драйвер Wintun. Обычно мешает "
                        "антивирус или другой VPN-клиент, который держит адаптер."),
             ("configure tun", "Windows не дала создать адаптер туннеля. Чаще всего "
