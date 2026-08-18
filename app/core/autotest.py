@@ -24,8 +24,8 @@ from app.core.strategies import Strategy
 
 TEST_TIMEOUT = 6
 SETTLE_SECONDS = 2.0
-MAX_TARGETS = 7
-MAX_WORKERS = 7
+MAX_TARGETS = 10
+MAX_WORKERS = 10
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,9 @@ class StrategyScore:
 
 
 DEFAULT_TARGETS: tuple[Target, ...] = (
+    Target("ChatGPT", "https://chatgpt.com"),
+    Target("Claude", "https://claude.ai"),
+    Target("Gemini", "https://gemini.google.com"),
     Target("Discord", "https://discord.com"),
     Target("Discord Gateway", "https://gateway.discord.gg"),
     Target("Discord CDN", "https://cdn.discordapp.com"),
@@ -71,6 +74,14 @@ DEFAULT_TARGETS: tuple[Target, ...] = (
     Target("YouTube CDN", "https://i.ytimg.com"),
     Target("Google Video", "https://redirector.googlevideo.com"),
     Target("Google", "https://www.google.com"),
+)
+
+
+# Нейросети режут доступ по стране, поэтому проверять их особенно полезно.
+AI_TARGETS: tuple[Target, ...] = (
+    Target("ChatGPT", "https://chatgpt.com"),
+    Target("Claude", "https://claude.ai"),
+    Target("Gemini", "https://gemini.google.com"),
 )
 
 
@@ -94,6 +105,11 @@ def load_targets() -> list[Target]:
         if value.upper().startswith("PING:"):
             continue  # ICMP ничего не говорит о работе DPI
         targets.append(Target(_humanize(key), value))
+    # Нейросетей в списке апстрима нет — добавляем их всегда.
+    known = {item.url for item in targets}
+    for extra in AI_TARGETS:
+        if extra.url not in known:
+            targets.insert(0, extra)
     return targets or list(DEFAULT_TARGETS)
 
 
