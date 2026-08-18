@@ -30,7 +30,8 @@ if (-not $version) { throw "Не удалось определить верси�
 Write-Host "Zapret Control+ $version" -ForegroundColor Green
 
 # version.txt читает автообновление приложения с GitHub.
-Set-Content -Path (Join-Path $root "version.txt") -Value $version -Encoding utf8 -NoNewline
+# Без BOM: иначе проверка обновлений не признаёт версию за версию.
+[System.IO.File]::WriteAllText((Join-Path $root "version.txt"), $version)
 
 # --- ресурсы --------------------------------------------------------------
 Step "Иконка и картинки установщика"
