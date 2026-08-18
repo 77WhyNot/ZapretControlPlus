@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -18,6 +19,7 @@ import requests
 from app.core import logs, paths
 from app.core.config import config
 from app.core.constants import USER_AGENT
+from app.core.vpn import xray
 from app.core.vpn.links import Server, parse_many
 
 FETCH_TIMEOUT = (8, 25)
@@ -97,6 +99,28 @@ def _parse_userinfo(header: str) -> dict[str, int]:
     return result
 
 
+def parse_payload(text: str) -> list[Server]:
+    """Разобрать тело подписки в любом из встречающихся форматов."""
+    if xray.looks_like_json(text):
+        servers = xray.parse(text)
+        if servers:
+            return servers
+    return parse_many(text)
+
+
+def _decode_title(raw: str) -> str:
+    """Панели иногда отдают название в виде base64:<...>."""
+    value = raw.strip()
+    if not value.lower().startswith("base64:"):
+        return value
+    payload = value.split(":", 1)[1]
+    padding = (-len(payload)) % 4
+    try:
+        return base64.b64decode(payload + "=" * padding).decode("utf-8", "replace").strip()
+    except (ValueError, base64.binascii.Error):  # type: ignore[attr-defined]
+        return value
+
+
 def _cache_path() -> Path:
     return paths.data_dir() / "subscription.json"
 
@@ -111,7 +135,12 @@ def load_cached() -> tuple[list[Server], SubscriptionInfo]:
     except (OSError, ValueError):
         return [], SubscriptionInfo()
 
-    servers = parse_many("\n".join(data.get("links") or []))
+    # Подписки-JSON на ссылки не раскладываются — их храним целиком.
+    raw = str(data.get("raw") or "")
+    if raw:
+        servers = parse_payload(raw)
+    else:
+        servers = parse_many("\n".join(data.get("links") or []))
     info_data = data.get("info") or {}
     info = SubscriptionInfo(**{
         key: info_data.get(key, getattr(SubscriptionInfo(), key))
@@ -121,9 +150,12 @@ def load_cached() -> tuple[list[Server], SubscriptionInfo]:
     return servers, info
 
 
-def save_cache(servers: list[Server], info: SubscriptionInfo) -> None:
+def save_cache(servers: list[Server], info: SubscriptionInfo,
+               raw: str = "") -> None:
     payload = {
         "links": [server.uri for server in servers if server.uri],
+        # Подписки-JSON не раскладываются на ссылки — храним тело целиком.
+        "raw": raw,
         "info": asdict(info),
     }
     try:
@@ -152,7 +184,7 @@ def fetch(url: str) -> tuple[list[Server], SubscriptionInfo]:
         raise RuntimeError("Ссылка на подписку не указана.")
     if not url.lower().startswith(("http://", "https://")):
         # Иногда вместо ссылки вставляют сам ключ — это тоже принимаем.
-        servers = parse_many(url)
+        servers = parse_payload(url)
         if not servers:
             raise RuntimeError(
                 "Это не похоже ни на ссылку-подписку, ни на ключ vless:// или ss://."
@@ -160,7 +192,7 @@ def fetch(url: str) -> tuple[list[Server], SubscriptionInfo]:
         info = SubscriptionInfo(
             title="Ключ вручную", updated_at=int(time.time()), server_count=len(servers)
         )
-        save_cache(servers, info)
+        save_cache(servers, info, url)
         return servers, info
 
     session = _session()
@@ -181,13 +213,13 @@ def fetch(url: str) -> tuple[list[Server], SubscriptionInfo]:
                 last_error = f"сервер ответил {response.status_code}"
                 continue
 
-            servers = parse_many(response.text)
+            servers = parse_payload(response.text)
             if not servers:
                 last_error = "в ответе нет ни одного понятного сервера"
                 continue
 
             info = SubscriptionInfo(
-                title=response.headers.get("profile-title", "").strip(),
+                title=_decode_title(response.headers.get("profile-title", "")),
                 updated_at=int(time.time()),
                 server_count=len(servers),
             )
@@ -199,7 +231,7 @@ def fetch(url: str) -> tuple[list[Server], SubscriptionInfo]:
                 info.total = values.get("total", 0)
                 info.expire = values.get("expire", 0)
 
-            save_cache(servers, info)
+            save_cache(servers, info, response.text)
             logs.info(f"Подписка обновлена: серверов {len(servers)}")
             return servers, info
     finally:

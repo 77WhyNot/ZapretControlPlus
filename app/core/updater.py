@@ -22,6 +22,7 @@ from app.core import engine as engine_module
 from app.core import logs, net, paths, strategies
 from app.core.config import config
 from app.core.constants import (
+    APP_ID,
     APP_REPO,
     APP_VERSION,
     UPSTREAM_ASSET_TEMPLATE,
@@ -57,6 +58,16 @@ class UpdateInfo:
     error: str = ""
 
 
+def _clean_version(raw: str) -> str:
+    """Обрезать BOM, кавычки и пробелы.
+
+    PowerShell и текстовые редакторы дописывают в начало файла невидимый
+    маркер U+FEFF. Из-за него версия перестаёт начинаться с цифры, и
+    проверка обновлений считает ответ сервера мусором.
+    """
+    return raw.replace("\ufeff", "").strip().strip('"').strip()
+
+
 def parse_version(value: str) -> tuple[int, ...]:
     numbers = re.findall(r"\d+", value or "")
     return tuple(int(n) for n in numbers[:4]) or (0,)
@@ -82,7 +93,7 @@ def check_core_update() -> UpdateInfo:
         f"{UPSTREAM_BRANCH}/{UPSTREAM_VERSION_PATH}"
     )
     try:
-        latest = net.fetch_text(url).strip().strip('"').strip()
+        latest = _clean_version(net.fetch_text(url))
     except net.NetworkError as exc:
         return UpdateInfo(current, "—", False, error=str(exc))
 
@@ -267,13 +278,13 @@ def check_app_update() -> UpdateInfo:
         )
     url = f"https://raw.githubusercontent.com/{APP_REPO}/main/version.txt"
     try:
-        latest = net.fetch_text(url).strip().strip('"').strip()
+        latest = _clean_version(net.fetch_text(url))
     except net.NetworkError as exc:
         return UpdateInfo(APP_VERSION, "—", False, error=str(exc))
     if not re.match(r"^\d", latest):
         return UpdateInfo(APP_VERSION, "—", False, error="Некорректный ответ сервера версий.")
 
-    asset = f"ZapretControl-Setup-{latest}.exe"
+    asset = f"{APP_ID}-Setup-{latest}.exe"
     download = f"https://github.com/{APP_REPO}/releases/download/v{latest}/{asset}"
     return UpdateInfo(
         current=APP_VERSION,
@@ -288,7 +299,7 @@ def install_app_update(info: UpdateInfo, progress: Progress | None = None) -> Pa
     """Скачать установщик новой версии и запустить его в тихом режиме."""
     if not info.download_url:
         raise RuntimeError("Неизвестен адрес загрузки установщика.")
-    target = paths.cache_dir() / f"ZapretControl-Setup-{info.latest}.exe"
+    target = paths.cache_dir() / f"{APP_ID}-Setup-{info.latest}.exe"
 
     def on_progress(done: int, total: int) -> None:
         if progress and total:
@@ -314,7 +325,7 @@ def launch_installer(installer: Path) -> None:
 
 def uninstall_leftovers() -> None:
     """Убрать скачанные установщики старых версий."""
-    for item in paths.cache_dir().glob("ZapretControl-Setup-*.exe"):
+    for item in paths.cache_dir().glob(f"{APP_ID}-Setup-*.exe"):
         try:
             if item.stem.endswith(APP_VERSION):
                 continue

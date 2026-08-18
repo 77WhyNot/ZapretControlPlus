@@ -112,6 +112,101 @@ Type: dirifempty; Name: "{app}"
 
 [Code]
 
+{ --- Обнаружение уже установленной версии ------------------------------- }
+
+const
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{2B7A9E14-63D5-4C81-A0F2-9D4E6C1B8A55}_is1';
+
+var
+  ActionPage: TInputOptionWizardPage;
+  PrevVersion: String;
+  PrevUninstaller: String;
+  LeavingAfterUninstall: Boolean;
+
+function PreviousInstallFound(): Boolean;
+begin
+  Result := RegQueryStringValue(HKLM, UninstallKey, 'UninstallString',
+                                PrevUninstaller);
+  if Result then
+  begin
+    if not RegQueryStringValue(HKLM, UninstallKey, 'DisplayVersion',
+                               PrevVersion) then
+      PrevVersion := 'неизвестной версии';
+  end;
+end;
+
+function RunPreviousUninstaller(Quiet: Boolean): Boolean;
+var
+  Command, Params: String;
+  ResultCode: Integer;
+begin
+  Command := RemoveQuotes(PrevUninstaller);
+  if Quiet then
+    Params := '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES'
+  else
+    Params := '/NORESTART';
+  Result := Exec(Command, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+  { Деинсталлятор Inno отвязывается от своего процесса, поэтому ждём отдельно. }
+  Sleep(2500);
+end;
+
+procedure InitializeWizard();
+begin
+  LeavingAfterUninstall := False;
+  if PreviousInstallFound() then
+  begin
+    ActionPage := CreateInputOptionPage(wpWelcome,
+      'Zapret Control+ уже установлена',
+      'На компьютере найдена версия ' + PrevVersion + '.',
+      'Выберите, что сделать:', True, False);
+    ActionPage.Add('Обновить — настройки, списки и подписка сохранятся');
+    ActionPage.Add('Переустановить начисто — снести старую версию и поставить заново');
+    ActionPage.Add('Удалить программу с компьютера');
+    ActionPage.SelectedValueIndex := 0;
+  end;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  { При обновлении папку выбирать незачем — она уже известна. }
+  Result := (ActionPage <> nil) and (PageID = wpSelectDir);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (ActionPage = nil) or (CurPageID <> ActionPage.ID) then
+    Exit;
+
+  case ActionPage.SelectedValueIndex of
+    1:
+      begin
+        if not RunPreviousUninstaller(True) then
+        begin
+          MsgBox('Не удалось запустить удаление старой версии.' #13#10
+                 'Удалите её вручную через «Программы и компоненты».',
+                 mbError, MB_OK);
+          Result := False;
+        end;
+      end;
+    2:
+      begin
+        RunPreviousUninstaller(False);
+        LeavingAfterUninstall := True;
+        Result := False;
+        WizardForm.Close;
+      end;
+  end;
+end;
+
+procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
+begin
+  { После удаления подтверждать выход не нужно — пользователь этого и хотел. }
+  if LeavingAfterUninstall then
+    Confirm := False;
+end;
+
+
 function IsAppRunning(): Boolean;
 var
   ResultCode: Integer;
