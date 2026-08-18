@@ -1,0 +1,61 @@
+name: Сборка релиза
+
+# Тег вида v1.0.1 собирает установщик и публикует релиз.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Установить зависимости
+        run: pip install -r requirements.txt
+
+      - name: Установить Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Собрать
+        run: powershell -ExecutionPolicy Bypass -File build\build.ps1
+
+      - name: Определить версию
+        id: meta
+        shell: pwsh
+        run: |
+          $version = (Get-Content version.txt -Raw).Trim()
+          "version=$version" >> $env:GITHUB_OUTPUT
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}".TrimStart("v")
+            if ($tag -ne $version) {
+              throw "Тег $tag не совпадает с APP_VERSION $version — поправьте app/core/constants.py"
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZapretControlPlus-Setup
+          path: dist/ZapretControlPlus-Setup-*.exe
+
+      - name: Опубликовать релиз
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ZapretControlPlus-Setup-*.exe
+          generate_release_notes: true
+          body: |
+            Установите `ZapretControlPlus-Setup-${{ steps.meta.outputs.version }}.exe` — ядро zapret уже внутри, доскачивать ничего не нужно.
+
+            Программа сама проверит обновления при следующем запуске.
