@@ -5,7 +5,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -54,6 +53,7 @@ class HomePage(Page):
         self._build_banners()
         self._build_rails()
         self._build_controls()
+        self._build_tunnel()
         self._build_stats()
 
         context.status_changed.connect(lambda _: self._refresh())
@@ -110,15 +110,15 @@ class HomePage(Page):
         self.body.addWidget(card)
 
     def _build_controls(self) -> None:
+        """Два выключателя. Под каждым — что выбрано, и это же кнопка перехода."""
         row = QHBoxLayout()
         row.setSpacing(16)
 
         # --- zapret ---
-        zapret_card = Card(padding=20, spacing=13)
+        zapret_card = Card(padding=20, spacing=12)
         head = QHBoxLayout()
         head.setSpacing(10)
-        self.zapret_title = section_label("Zapret")
-        head.addWidget(self.zapret_title)
+        head.addWidget(section_label("Zapret"))
         head.addStretch(1)
         self.switch_zapret = Switch(False)
         self.switch_zapret.toggled.connect(self._toggle_zapret)
@@ -126,29 +126,22 @@ class HomePage(Page):
         zapret_card.add_layout(head)
 
         zapret_card.add(faint_label(
-            "Ломает распознавание домена у провайдера. Работает для всей "
-            "системы сразу, выбирать программы не нужно."
+            "Ломает распознавание домена у провайдера. Работает сразу для "
+            "всей системы, выбирать программы не нужно."
         ))
 
-        self.strategy_box = QComboBox()
-        self.strategy_box.currentIndexChanged.connect(self._strategy_picked)
-        zapret_card.add(self.strategy_box)
-
-        self.mode_box = QComboBox()
-        self.mode_box.addItem("Служба Windows", MODE_SERVICE)
-        self.mode_box.addItem("Процесс", MODE_PROCESS)
-        self.mode_box.currentIndexChanged.connect(
-            lambda: config.set("run_mode", self.mode_box.currentData())
+        self.btn_strategy = Button("Основная")
+        self.btn_strategy.clicked.connect(
+            lambda: self.context.navigate.emit("strategies")
         )
-        zapret_card.add(self.mode_box)
+        zapret_card.add(self.btn_strategy)
         row.addWidget(zapret_card, 1)
 
         # --- vpn ---
-        vpn_card = Card(padding=20, spacing=13)
+        vpn_card = Card(padding=20, spacing=12)
         head_vpn = QHBoxLayout()
         head_vpn.setSpacing(10)
-        self.vpn_title = section_label("VPN")
-        head_vpn.addWidget(self.vpn_title)
+        head_vpn.addWidget(section_label("VPN"))
         head_vpn.addStretch(1)
         self.switch_vpn = Switch(False)
         self.switch_vpn.toggled.connect(self._toggle_vpn)
@@ -156,38 +149,109 @@ class HomePage(Page):
         vpn_card.add_layout(head_vpn)
 
         vpn_card.add(faint_label(
-            "Уводит трафик в туннель. Можно включить только для выбранных "
-            "программ — остальные останутся на zapret."
+            "Уводит в туннель только выбранные программы. Остальные остаются "
+            "на zapret."
         ))
 
-        self.server_box = QComboBox()
-        self.server_box.currentIndexChanged.connect(self._server_picked)
-        vpn_card.add(self.server_box)
-
-        self.vpn_mode_box = QComboBox()
-        for key, label in vpn_config.MODE_LABELS.items():
-            self.vpn_mode_box.addItem(label, key)
-        self.vpn_mode_box.currentIndexChanged.connect(
-            lambda: config.set("vpn_mode", self.vpn_mode_box.currentData())
-        )
-        vpn_card.add(self.vpn_mode_box)
+        self.btn_server = Button("Подписка не настроена")
+        self.btn_server.clicked.connect(lambda: self.context.navigate.emit("servers"))
+        vpn_card.add(self.btn_server)
         row.addWidget(vpn_card, 1)
 
         self.body.addLayout(row)
 
+    def _build_tunnel(self) -> None:
+        """Состав туннеля виден сразу, менять — не уходя со страницы."""
+        card = Card(padding=16, spacing=10)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        self.tunnel_caption = faint_label("В туннеле", wrap=False)
+        header.addWidget(self.tunnel_caption)
+        header.addStretch(1)
+        self.btn_edit_apps = Button("Изменить", variant="ghost")
+        self.btn_edit_apps.clicked.connect(
+            lambda: self.context.navigate.emit("vpnapps")
+        )
+        header.addWidget(self.btn_edit_apps)
+        card.add_layout(header)
+
+        self.tunnel_host = QWidget()
+        self.tunnel_row = QHBoxLayout(self.tunnel_host)
+        self.tunnel_row.setContentsMargins(0, 0, 0, 0)
+        self.tunnel_row.setSpacing(7)
+        card.add(self.tunnel_host)
+
+        self.body.addWidget(card)
+
+    def _refresh_tunnel(self) -> None:
+        from app.ui.appicons import app_pixmap
+        from app.ui.widgets import clear_layout
+
+        clear_layout(self.tunnel_row)
+        mode = str(config.get("vpn_mode", vpn_config.MODE_SELECTED))
+
+        if mode == vpn_config.MODE_ALL:
+            self.tunnel_caption.setText("В туннеле")
+            self.tunnel_row.addWidget(faint_label("весь трафик", wrap=False))
+            self.tunnel_row.addStretch(1)
+            return
+
+        key = "vpn_direct_apps" if mode == vpn_config.MODE_EXCEPT else "vpn_apps"
+        self.tunnel_caption.setText(
+            "Мимо туннеля" if mode == vpn_config.MODE_EXCEPT else "В туннеле"
+        )
+        names = list(config.get(key, []) or [])
+
+        if not names:
+            self.tunnel_row.addWidget(faint_label(
+                "программы не выбраны — нажмите «Изменить»", wrap=False
+            ))
+            self.tunnel_row.addStretch(1)
+            return
+
+        ratio = self.devicePixelRatioF() or 1.0
+        for name in names[:6]:
+            chip = QWidget(self.tunnel_host)
+            line = QHBoxLayout(chip)
+            line.setContentsMargins(7, 4, 10, 4)
+            line.setSpacing(7)
+
+            icon = QLabel(chip)
+            icon.setFixedSize(18, 18)
+            icon.setPixmap(app_pixmap(
+                apps_module.resolve_executable(name),
+                apps_module._pretty_name(name), 18, ratio,
+            ))
+            line.addWidget(icon)
+            title = QLabel(apps_module._pretty_name(name), chip)
+            title.setStyleSheet("font-size: 12px;")
+            line.addWidget(title)
+
+            chip.setStyleSheet(
+                f"background: {self.context.color('surface_alt')};"
+                f"border: 1px solid {self.context.color('border')};"
+                "border-radius: 8px;"
+            )
+            self.tunnel_row.addWidget(chip)
+
+        if len(names) > 6:
+            self.tunnel_row.addWidget(faint_label(f"и ещё {len(names) - 6}", wrap=False))
+        self.tunnel_row.addStretch(1)
+
     def _build_stats(self) -> None:
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=18, spacing=14)
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(28)
+        grid.setHorizontalSpacing(26)
         grid.setVerticalSpacing(10)
         self.stat_zapret = StatItem("Zapret", "выключен")
         self.stat_vpn = StatItem("VPN", "выключен")
-        self.stat_server = StatItem("Сервер", "—")
+        self.stat_subscription = StatItem("Подписка", "—")
         self.stat_uptime = StatItem("Время работы", "—")
-        for column, item in enumerate(
-            (self.stat_zapret, self.stat_vpn, self.stat_server, self.stat_uptime)
-        ):
+        for column, item in enumerate((
+            self.stat_zapret, self.stat_vpn, self.stat_subscription, self.stat_uptime
+        )):
             grid.addWidget(item, 0, column)
         grid.setColumnStretch(4, 1)
         card.add_layout(grid)
@@ -198,12 +262,17 @@ class HomePage(Page):
         actions.setSpacing(10)
         self.check_spinner = Spinner(16, self.context.color("accent"))
         actions.addWidget(self.check_spinner)
-        self.btn_check = Button("Проверить доступность", variant="soft")
+        self.btn_check = Button("Проверить доступность", variant="primary")
         self.btn_check.clicked.connect(self._run_check)
         actions.addWidget(self.btn_check)
-        self.btn_apps = Button("Настроить приложения", variant="ghost")
-        self.btn_apps.clicked.connect(lambda: self.context.navigate.emit("vpnapps"))
-        actions.addWidget(self.btn_apps)
+        self.btn_diag = Button("Диагностика")
+        self.btn_diag.clicked.connect(
+            lambda: self.context.navigate.emit("diagnostics")
+        )
+        actions.addWidget(self.btn_diag)
+        self.btn_restart = Button("Перезапустить", variant="ghost")
+        self.btn_restart.clicked.connect(self._restart_all)
+        actions.addWidget(self.btn_restart)
         actions.addStretch(1)
         card.add_layout(actions)
 
@@ -212,6 +281,21 @@ class HomePage(Page):
         card.add_layout(self.check_results)
 
         self.body.addWidget(card)
+
+    def _restart_all(self) -> None:
+        """Перезапустить то, что сейчас включено."""
+        status = self.context.status
+        vpn = self.context.vpn_status
+        if not status.running and not vpn.running:
+            self.context.warn("Нечего перезапускать — ничего не включено.")
+            return
+        if status.running:
+            self.switch_zapret.setChecked(False, animate=False)
+            self._toggle_zapret(False)
+            QTimer.singleShot(1200, lambda: self._toggle_zapret(True))
+        if vpn.running:
+            QTimer.singleShot(2400, lambda: self._toggle_vpn(False))
+            QTimer.singleShot(3600, lambda: self._toggle_vpn(True))
 
     # --- состояние -------------------------------------------------------
 
@@ -235,58 +319,11 @@ class HomePage(Page):
         self.banner_foreign.setVisible(True)
 
     def _reload_strategies(self) -> None:
-        items = self.context.load_strategies()
-        current = str(config.get("last_strategy"))
-        self.strategy_box.blockSignals(True)
-        self.strategy_box.clear()
-        for strategy in items:
-            label = strategy.title
-            if strategy.badge:
-                label = f"{strategy.title}  ·  {strategy.badge}"
-            self.strategy_box.addItem(label, strategy.id)
-        index = self.strategy_box.findData(current)
-        if index >= 0:
-            self.strategy_box.setCurrentIndex(index)
-        self.strategy_box.blockSignals(False)
-
-        mode_index = self.mode_box.findData(str(config.get("run_mode")))
-        if mode_index >= 0:
-            self.mode_box.blockSignals(True)
-            self.mode_box.setCurrentIndex(mode_index)
-            self.mode_box.blockSignals(False)
+        # Списки выбора переехали на свои страницы — здесь только показ.
+        self._refresh()
 
     def _reload_servers(self) -> None:
-        servers = self.context.servers()
-        chosen = self.context.selected_server()
-        self.server_box.blockSignals(True)
-        self.server_box.clear()
-        if not servers:
-            self.server_box.addItem("Подписка не настроена", "")
-            self.server_box.setEnabled(False)
-        else:
-            self.server_box.setEnabled(True)
-            for server in servers:
-                self.server_box.addItem(server.name, server.name)
-            index = self.server_box.findData(chosen)
-            if index >= 0:
-                self.server_box.setCurrentIndex(index)
-        self.server_box.blockSignals(False)
-
-        mode_index = self.vpn_mode_box.findData(str(config.get("vpn_mode")))
-        if mode_index >= 0:
-            self.vpn_mode_box.blockSignals(True)
-            self.vpn_mode_box.setCurrentIndex(mode_index)
-            self.vpn_mode_box.blockSignals(False)
-
-    def _strategy_picked(self) -> None:
-        value = self.strategy_box.currentData()
-        if value:
-            config.set("last_strategy", value)
-
-    def _server_picked(self) -> None:
-        value = self.server_box.currentData()
-        if value:
-            config.set("vpn_selected_server", value)
+        self._refresh()
 
     def _lane_clicked(self, key: str) -> None:
         if key == "vpn":
@@ -346,9 +383,29 @@ class HomePage(Page):
         self.stat_vpn.set_value(
             vpn_config.MODE_LABELS.get(vpn.mode, "включён") if vpn.running else "выключен"
         )
-        self.stat_server.set_value(
-            (vpn.server or self.context.selected_server() or "—") if vpn.running else "—"
+
+        strategy = self.context.current_strategy()
+        self.btn_strategy.setText(
+            f"✦  {strategy.title}" if strategy else "✦  стратегия не выбрана"
         )
+        server = self.context.selected_server()
+        servers = self.context.servers()
+        if servers:
+            self.btn_server.setText(f"⇄  {server or servers[0].name}   ·   {len(servers)} серверов")
+        else:
+            self.btn_server.setText("⇄  подписка не настроена")
+
+        from app.core.vpn import subscription as sub
+        _, info = sub.load_cached()
+        days = info.days_left
+        if not servers:
+            self.stat_subscription.set_value("—")
+        elif days is None:
+            self.stat_subscription.set_value("бессрочная")
+        else:
+            self.stat_subscription.set_value(f"{days} дн.")
+
+        self._refresh_tunnel()
         self._refresh_uptime()
 
     def _refresh_uptime(self) -> None:
@@ -376,7 +433,7 @@ class HomePage(Page):
             if strategy is None:
                 self._zapret_done("Стратегия не найдена.", error=True)
                 return
-            mode = str(self.mode_box.currentData() or config.get("run_mode"))
+            mode = str(config.get("run_mode"))
             worker = Worker(self)
             worker.finished.connect(
                 lambda _: self._zapret_done(f"Zapret включён — «{strategy.title}»")

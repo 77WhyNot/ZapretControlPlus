@@ -79,18 +79,25 @@ class MONITORINFO(ctypes.Structure):
     ]
 
 
-PAGES = (
+# В боковом меню видны только те разделы, куда заходят регулярно.
+# Остальные никуда не делись — они за кнопкой «Ещё».
+PRIMARY_PAGES = (
     ("home", "Маршруты", "shield_check"),
     ("servers", "Серверы", "globe"),
     ("vpnapps", "Приложения", "layers"),
-    ("dns", "DNS", "bolt"),
     ("strategies", "Стратегии", "refresh"),
-    ("lists", "Списки", "list"),
     ("diagnostics", "Диагностика", "stethoscope"),
+)
+
+MORE_PAGES = (
+    ("dns", "DNS", "bolt"),
+    ("lists", "Списки", "list"),
     ("updates", "Обновления", "download"),
     ("settings", "Настройки", "settings"),
     ("about", "О программе", "info"),
 )
+
+PAGES = PRIMARY_PAGES + MORE_PAGES
 
 
 class TitleBar(QWidget):
@@ -288,14 +295,20 @@ class MainWindow(QWidget):
             "settings": SettingsPage,
             "about": AboutPage,
         }
-        for key, title, icon_name in PAGES:
-            if key == "settings":
-                sidebar_layout.addStretch(1)
+        for key, title, icon_name in PRIMARY_PAGES:
             button = NavButton(key, title, icon_name, self.context, self.sidebar)
             button.clicked.connect(lambda _=False, k=key: self.show_page(k))
             self.nav_group.addButton(button)
             sidebar_layout.addWidget(button)
             self.nav_buttons[key] = button
+
+        sidebar_layout.addStretch(1)
+
+        self.more_button = NavButton("__more__", "Ещё", "settings",
+                                     self.context, self.sidebar)
+        self.more_button.setCheckable(False)
+        self.more_button.clicked.connect(self._show_more_menu)
+        sidebar_layout.addWidget(self.more_button)
 
         body_layout.addWidget(self.sidebar)
         body_layout.addWidget(self.pages, 1)
@@ -404,16 +417,42 @@ class MainWindow(QWidget):
         for nav_key, button in self.nav_buttons.items():
             button.setChecked(nav_key == key)
             button.apply_theme()
+
+        # Раздел из «Ещё» подсвечиваем самой кнопкой «Ещё».
+        more_keys = {item[0] for item in MORE_PAGES}
+        more = getattr(self, "more_button", None)
+        if more is not None:
+            title = dict((k, t) for k, t, _ in MORE_PAGES).get(key)
+            more.setText(title or "Ещё")
+            more.setChecked(key in more_keys)
+            more.apply_theme()
         self._move_marker(key)
         activate = getattr(widget, "on_activate", None)
         if callable(activate):
             activate()
 
+    def _show_more_menu(self) -> None:
+        """Разделы, которыми пользуются редко, — по кнопке «Ещё»."""
+        menu = QMenu(self)
+        for key, title, icon_name in MORE_PAGES:
+            action = QAction(
+                icons.icon(icon_name, self.context.color("text_dim"), 16), title, menu
+            )
+            action.triggered.connect(lambda _=False, k=key: self.show_page(k))
+            menu.addAction(action)
+        button = self.more_button
+        menu.exec(button.mapToGlobal(button.rect().topRight()))
+
     def _move_marker(self, key: str) -> None:
         """Подвинуть полоску к выбранному пункту меню."""
         button = self.nav_buttons.get(key)
         if button is None:
-            return
+            button = getattr(self, "more_button", None)
+            if button is None or not button.isChecked():
+                marker = getattr(self, "nav_marker", None)
+                if marker is not None:
+                    marker.hide()
+                return
         target = QRect(2, button.y() + 8, 3, max(button.height() - 16, 8))
         self.nav_marker.setStyleSheet(
             f"background: {self.context.color('accent')}; border-radius: 1px;"
