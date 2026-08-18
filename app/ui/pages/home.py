@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 from app.core import autotest, winapi
 from app.core.config import config
 from app.core.engine import MODE_PROCESS, MODE_SERVICE, engine
+from app.core.strategies import GAME_FILTER_LABELS
 from app.core.vpn import apps as apps_module
 from app.core.vpn import config as vpn_config
 from app.core.vpn import integration
@@ -54,6 +56,7 @@ class HomePage(Page):
         self._build_rails()
         self._build_controls()
         self._build_tunnel()
+        self._build_filters()
         self._build_stats()
 
         context.status_changed.connect(lambda _: self._refresh())
@@ -239,6 +242,107 @@ class HomePage(Page):
             self.tunnel_row.addWidget(faint_label(f"и ещё {len(names) - 6}", wrap=False))
         self.tunnel_row.addStretch(1)
 
+    def _build_filters(self) -> None:
+        """Игровой фильтр и IPSet — те же два переключателя, что в меню zapret."""
+        from app.core import lists as lists_module
+        from app.ui.widgets import SettingRow
+
+        card = Card(padding=18, spacing=12)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        header.addWidget(section_label("Фильтры zapret"))
+        header.addStretch(1)
+        self.filters_hint = faint_label("применяются после перезапуска обхода",
+                                        wrap=False)
+        header.addWidget(self.filters_hint)
+        card.add_layout(header)
+
+        self.game_box = QComboBox()
+        for key, label in GAME_FILTER_LABELS.items():
+            self.game_box.addItem(label.capitalize(), key)
+        self.game_box.currentIndexChanged.connect(self._change_game_filter)
+        card.add(SettingRow(
+            "Игровой фильтр",
+            "Расширяет обход на порты 1024–65535, чтобы заработали игры и "
+            "голосовые сервисы. Нагрузка растёт, а часть программ может начать "
+            "сбоить — включайте, если без него игры не работают.",
+            self.game_box,
+        ))
+
+        card.add(Divider())
+
+        self.ipset_box = QComboBox()
+        for key, label in lists_module.IPSET_MODES.items():
+            self.ipset_box.addItem(label, key)
+        self.ipset_box.currentIndexChanged.connect(self._change_ipset)
+        card.add(SettingRow(
+            "Фильтр по IP (IPSet)",
+            "Список подсетей заблокированных сервисов — нужен там, где домен "
+            "определить нельзя, например для голосовых серверов Discord. "
+            "«Без ограничений» отключает проверку по списку.",
+            self.ipset_box,
+        ))
+
+        self.body.addWidget(card)
+        self._sync_filters()
+
+    def _sync_filters(self) -> None:
+        from app.core import lists as lists_module
+        from app.core import strategies as strategies_module
+
+        self.game_box.blockSignals(True)
+        index = self.game_box.findData(strategies_module.read_game_filter())
+        if index >= 0:
+            self.game_box.setCurrentIndex(index)
+        self.game_box.blockSignals(False)
+
+        self.ipset_box.blockSignals(True)
+        index = self.ipset_box.findData(lists_module.ipset_mode())
+        if index >= 0:
+            self.ipset_box.setCurrentIndex(index)
+        self.ipset_box.blockSignals(False)
+
+        size = lists_module.ipset_size()
+        self.filters_hint.setText(
+            f"{size} подсетей в списке · применяются после перезапуска обхода"
+            if size else "применяются после перезапуска обхода"
+        )
+
+    def _change_game_filter(self) -> None:
+        from app.core import strategies as strategies_module
+
+        mode = str(self.game_box.currentData())
+        strategies_module.write_game_filter(mode)
+        strategies_module.invalidate_cache()
+        self.context.strategies_changed.emit()
+        if self.context.status.running:
+            self.context.warn(
+                f"Игровой фильтр: {GAME_FILTER_LABELS[mode]}. "
+                "Перезапустите обход, чтобы применить."
+            )
+        else:
+            self.context.ok(f"Игровой фильтр: {GAME_FILTER_LABELS[mode]}")
+
+    def _change_ipset(self) -> None:
+        from app.core import lists as lists_module
+
+        mode = str(self.ipset_box.currentData())
+        try:
+            lists_module.set_ipset_mode(mode)
+        except (RuntimeError, OSError) as exc:
+            self.context.error(str(exc))
+            self._sync_filters()
+            return
+        self._sync_filters()
+        if self.context.status.running:
+            self.context.warn(
+                f"Фильтр IP: {lists_module.IPSET_MODES[mode]}. "
+                "Перезапустите обход, чтобы применить."
+            )
+        else:
+            self.context.ok(f"Фильтр IP: {lists_module.IPSET_MODES[mode]}")
+
     def _build_stats(self) -> None:
         card = Card(padding=18, spacing=14)
 
@@ -300,6 +404,7 @@ class HomePage(Page):
     # --- состояние -------------------------------------------------------
 
     def on_activate(self) -> None:
+        self._sync_filters()
         self._reload_strategies()
         self._reload_servers()
         self.context.refresh_status(force=True)
