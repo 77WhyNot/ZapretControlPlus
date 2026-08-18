@@ -42,8 +42,10 @@ class Page(QWidget):
         self.subtitle_label = QLabel(subtitle)
         self.subtitle_label.setObjectName("PageSubtitle")
         self.subtitle_label.setWordWrap(True)
-        self.subtitle_label.setVisible(bool(subtitle))
+        # Сначала в компоновку, потом видимость: setVisible на виджете
+        # без родителя заставляет Qt показать его отдельным окном.
         header_layout.addWidget(self.subtitle_label)
+        self.subtitle_label.setVisible(bool(subtitle))
 
         self.header_extra = QHBoxLayout()
         self.header_extra.setContentsMargins(0, 6, 0, 0)

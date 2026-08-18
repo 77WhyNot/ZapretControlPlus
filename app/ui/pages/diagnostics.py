@@ -166,8 +166,8 @@ class DiagnosticsPage(Page):
         self.results_card = Card(padding=6, spacing=0)
         self.results_layout = self.results_card.body()
         # Пустая карточка выглядит как артефакт вёрстки — показываем по результату.
-        self.results_card.setVisible(False)
         self.body.addWidget(self.results_card)
+        self.results_card.setVisible(False)
 
     def _build_log(self) -> None:
         card = Card(padding=20, spacing=12)

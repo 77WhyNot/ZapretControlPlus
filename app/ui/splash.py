@@ -33,6 +33,9 @@ class Splash(QWidget):
 
         self.setFixedSize(WIDTH, HEIGHT)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        # Без прозрачности за скруглёнными углами виден серый фон окна.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
         icon_path = paths.resource_path("icon.png")
         if icon_path.exists():

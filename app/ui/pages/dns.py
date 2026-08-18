@@ -45,9 +45,11 @@ class PresetCard(QFrame):
         self.title = QLabel(preset.title)
         self.title.setStyleSheet("font-weight: 600; font-size: 14px;")
         head.addWidget(self.title)
-        self.badge = Badge("включён", "accent")
-        self.badge.setVisible(active)
+        # Родителя передаём явно: компоновка head ещё не прикреплена
+        # к виджету, поэтому сама по себе родителя не назначит.
+        self.badge = Badge("включён", "accent", self)
         head.addWidget(self.badge)
+        self.badge.setVisible(active)
         head.addStretch(1)
         if preset.doh:
             head.addWidget(Badge("шифрование", "neutral"))

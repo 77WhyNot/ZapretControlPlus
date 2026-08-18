@@ -211,12 +211,12 @@ class StrategiesPage(Page):
         ))
 
         self.auto_progress = QProgressBar()
-        self.auto_progress.setVisible(False)
         card.add(self.auto_progress)
+        self.auto_progress.setVisible(False)
 
         self.auto_status = faint_label("")
-        self.auto_status.setVisible(False)
         card.add(self.auto_status)
+        self.auto_status.setVisible(False)
 
         self.auto_results = QWidget()
         self.auto_results_layout = QVBoxLayout(self.auto_results)
