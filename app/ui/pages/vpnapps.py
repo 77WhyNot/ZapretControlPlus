@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+import time
+
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -190,6 +192,44 @@ class VpnAppsPage(Page):
         self._reload_cards()
         self._update_summary()
         self.context.ok(f"Режим: {vpn_config.MODE_LABELS[mode]}")
+        self._restart_vpn_if_running("Режим маршрутизации изменён")
+
+    def _restart_vpn_if_running(self, reason: str) -> None:
+        """Настройки маршрутов читаются только при запуске — перезапускаем сами."""
+        from app.core.vpn.engine import vpn_engine
+        from app.ui.widgets import Worker
+
+        if not vpn_engine.status().running:
+            return
+
+        servers = self.context.servers()
+        if not servers:
+            return
+
+        selected = self.context.selected_server()
+        mode = str(config.get("vpn_mode", vpn_config.MODE_SELECTED))
+        vpn_apps = list(config.get("vpn_apps", []) or [])
+        direct_apps = list(config.get("vpn_direct_apps", []) or [])
+        stack = str(config.get("vpn_stack", vpn_config.STACK_DEFAULT))
+
+        self.context.warn(f"{reason} — перезапускаю VPN…")
+
+        def job():
+            vpn_engine.stop(quiet=True)
+            time.sleep(1.0)
+            vpn_engine.start(servers, selected, mode, vpn_apps, direct_apps, stack)
+
+        worker = Worker(self)
+        worker.finished.connect(
+            lambda _: (self.context.refresh_vpn_status(force=True),
+                       self.context.ok("VPN перезапущен с новыми правилами"))
+        )
+        worker.failed.connect(
+            lambda message: (self.context.refresh_vpn_status(force=True),
+                             self.context.error(f"Не удалось перезапустить: {message}"))
+        )
+        worker.run(job)
+        self._restart_worker = worker
         # Режим маршрутизации зашит в конфиг движка — без перезапуска
         # изменение просто не применится, а человек будет думать, что оно есть.
         self._restart_if_running("Режим изменён")

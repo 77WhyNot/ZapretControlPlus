@@ -111,15 +111,63 @@ def set_adapter_enabled(name: str, enabled: bool) -> bool:
     return code == 0
 
 
-def cleanup_stale_adapters(only_ours: bool = True) -> list[str]:
-    """Убрать зависшие туннели, мешающие запуску и захватившие маршрут."""
-    removed: list[str] = []
-    if only_ours:
-        return removed
-    for name in orphan_tunnels():
-        if set_adapter_enabled(name, False):
-            removed.append(name)
-    return removed
+PAUSED_KEY = "vpn_paused_adapters"
+
+
+def paused_adapters() -> list[str]:
+    from app.core.config import config
+
+    return list(config.get(PAUSED_KEY, []) or [])
+
+
+def remember_paused(name: str) -> None:
+    from app.core.config import config
+
+    names = paused_adapters()
+    if name not in names:
+        names.append(name)
+        config.set(PAUSED_KEY, names)
+
+
+def restore_paused_adapters() -> list[str]:
+    """Вернуть все адаптеры, которые мы когда-либо выключали.
+
+    Вызывается и при остановке, и при запуске приложения: если программу
+    закрыли или она упала, адаптер иначе остался бы выключенным навсегда.
+    """
+    from app.core.config import config
+
+    restored: list[str] = []
+    for name in paused_adapters():
+        if set_adapter_enabled(name, True):
+            restored.append(name)
+    if restored:
+        config.set(PAUSED_KEY, [])
+    return restored
+
+
+def pause_adapter(name: str) -> bool:
+    """Выключить чужой адаптер по явной команде — с записью на диск."""
+    if set_adapter_enabled(name, False):
+        remember_paused(name)
+        return True
+    return False
+
+
+def free_busy_adapters() -> str:
+    """Освободить адаптер по явной команде пользователя.
+
+    Автоматически это не делается никогда: под чужим адаптером может
+    работать VPN, которым человек пользуется прямо сейчас.
+    """
+    names = orphan_tunnels()
+    if not names:
+        return "Занятых чужих туннелей не найдено."
+    done = [name for name in names if pause_adapter(name)]
+    if not done:
+        return "Не удалось отключить: " + ", ".join(names)
+    return ("Временно отключено: " + ", ".join(done)
+            + ". Вернём обратно, как только выключите VPN здесь.")
 
 
 class VpnEngine:
@@ -136,7 +184,9 @@ class VpnEngine:
         self._started_at = 0.0
         self._probe_port = 0
         self._last_output: list[str] = []
-        self._paused_adapters: list[str] = []
+        # Список храним в настройках: если приложение закроют или оно
+        # упадёт, выключенный адаптер иначе останется выключенным навсегда.
+        # Именно так у пользователя перестал работать чужой клиент.
         self.on_state_change: Callable[[], None] | None = None
         self.on_progress: Callable[[str], None] | None = None
 
@@ -195,17 +245,16 @@ class VpnEngine:
             self._start_once(servers, selected, mode, vpn_apps, direct_apps,
                              stack, retried=False)
         except _AdapterBusy:
-            # Зависший адаптер мог остаться от любого клиента на том же движке.
-            cleanup_stale_adapters(only_ours=False)
-            time.sleep(2.0)
-            try:
-                self._start_once(servers, selected, mode, vpn_apps, direct_apps,
-                                 stack, retried=True)
-            except _AdapterBusy:
-                raise VpnError(
-                    "Сетевой адаптер занят зависшим устройством, убрать его "
-                    "не удалось. Помогает перезагрузка компьютера."
-                ) from None
+            # Чужой адаптер молча не выключаем: под ним может работать VPN,
+            # которым человек пользуется прямо сейчас. Называем виновника и
+            # предлагаем решить это осознанно.
+            busy = ", ".join(orphan_tunnels()) or "другой туннель"
+            raise VpnError(
+                f"Сетевой адаптер занят: {busy}. Это чужой VPN-клиент — "
+                "программа его не трогает, чтобы не оборвать вам связь. "
+                "Отключите его сами либо нажмите «Освободить адаптер» "
+                "на вкладке «Диагностика»."
+            ) from None
 
     def _start_once(
         self,
@@ -235,10 +284,9 @@ class VpnEngine:
         # держать маршруты — наш трафик уходит в него как в чёрную дыру.
         # Поэтому, если ни один чужой клиент не запущен, чистим все зависшие,
         # а не только свои.
-        stale = cleanup_stale_adapters(only_ours=False)
-        if stale:
-            self._paused_adapters = stale
-            time.sleep(2.0)
+        # Чужие адаптеры автоматически НЕ трогаем: под ними может работать
+        # тот VPN, которым человек пользуется прямо сейчас. Конфликт
+        # разруливается по явной команде на вкладке «Диагностика».
 
         self._port = _free_port(self._port)
         self._probe_port = _free_port(0)
@@ -480,10 +528,7 @@ class VpnEngine:
             stopped = True
         self._started_at = 0.0
 
-        # Возвращаем чужие адаптеры, которые выключали на время работы.
-        for name in self._paused_adapters:
-            set_adapter_enabled(name, True)
-        self._paused_adapters = []
+        restore_paused_adapters()
 
         if stopped and not quiet:
             logs.info("VPN отключён")

@@ -306,6 +306,18 @@ class DiagnosticsPage(Page):
         self.btn_stop_clients.clicked.connect(self._stop_clients)
         clients_row.addWidget(self.btn_stop_clients)
 
+        self.btn_free_adapter = Button("Освободить адаптер", variant="ghost")
+        self.btn_free_adapter.clicked.connect(
+            lambda: self._run_tool(self._free_adapter, self.btn_free_adapter)
+        )
+        clients_row.addWidget(self.btn_free_adapter)
+
+        self.btn_restore_adapters = Button("Вернуть адаптеры", variant="ghost")
+        self.btn_restore_adapters.clicked.connect(
+            lambda: self._run_tool(self._restore_adapters, self.btn_restore_adapters)
+        )
+        clients_row.addWidget(self.btn_restore_adapters)
+
         self.btn_flush_dns = Button("Сбросить кэш DNS", variant="ghost")
         self.btn_flush_dns.clicked.connect(
             lambda: self._run_tool(self._flush_dns, self.btn_flush_dns)
@@ -316,6 +328,21 @@ class DiagnosticsPage(Page):
 
         self.body.addWidget(card)
         self._refresh_clients()
+
+    def _free_adapter(self) -> str:
+        """Отключить чужой туннель, который мешает поднять наш."""
+        from app.core.vpn.engine import free_busy_adapters
+
+        return free_busy_adapters()
+
+    def _restore_adapters(self) -> str:
+        """Вернуть всё, что программа когда-либо отключала."""
+        from app.core.vpn.engine import restore_paused_adapters
+
+        restored = restore_paused_adapters()
+        if not restored:
+            return "Отключённых нами адаптеров нет — возвращать нечего."
+        return "Возвращены адаптеры: " + ", ".join(restored)
 
     def _flush_dns(self) -> str:
         from app.core import dnsctl
