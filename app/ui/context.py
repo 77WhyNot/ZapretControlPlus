@@ -17,6 +17,9 @@ class AppContext(QObject):
     status_changed = Signal(object)
     strategies_changed = Signal()
     tunnels_changed = Signal(object)   # список чужих VPN-туннелей
+    tgws_changed = Signal(object)      # состояние WebSocket-прокси Telegram
+    vpn_status_changed = Signal(object)
+    servers_changed = Signal()
     update_available = Signal(str, object)  # 'core' | 'app', UpdateInfo или None
     install_update = Signal(str)       # просьба поставить: 'core' | 'app'
     notify = Signal(str, str)          # текст, вид (ok/warn/error)
@@ -29,6 +32,10 @@ class AppContext(QObject):
         )
         self._status = engine.status()
         self._tunnels: list[str] = []
+        self._tgws = None
+        self._tgws_key: tuple = ()
+        self._vpn = None
+        self._servers: list = []
 
     # --- тема ------------------------------------------------------------
 
@@ -80,6 +87,66 @@ class AppContext(QObject):
             self._tunnels = found
             self.tunnels_changed.emit(list(found))
         return list(found)
+
+    # --- Telegram через WebSocket -----------------------------------------
+
+    @property
+    def tgws_status(self):
+        if self._tgws is None:
+            from app.core.tgws import tgws_engine
+
+            self._tgws = tgws_engine.status()
+        return self._tgws
+
+    def refresh_tgws(self, force: bool = False):
+        from app.core.tgws import tgws_engine
+
+        status = tgws_engine.status()
+        key = (status.running, status.port, status.active, status.websocket,
+               status.fallback, status.error)
+        self._tgws = status
+        if force or key != self._tgws_key:
+            self._tgws_key = key
+            self.tgws_changed.emit(status)
+        return status
+
+    # --- VPN -------------------------------------------------------------
+
+    @property
+    def vpn_status(self):
+        if self._vpn is None:
+            from app.core.vpn.engine import vpn_engine
+
+            self._vpn = vpn_engine.status()
+        return self._vpn
+
+    def refresh_vpn_status(self, force: bool = False):
+        from app.core.vpn.engine import vpn_engine
+
+        status = vpn_engine.status()
+        if force or status != self._vpn:
+            self._vpn = status
+            self.vpn_status_changed.emit(status)
+        return status
+
+    def servers(self) -> list:
+        """Серверы подписки: держим в контексте, чтобы не читать кэш на каждой странице."""
+        if not self._servers:
+            from app.core.vpn import subscription
+
+            self._servers, _ = subscription.load_cached()
+        return list(self._servers)
+
+    def set_servers(self, servers: list) -> None:
+        self._servers = list(servers)
+        self.servers_changed.emit()
+
+    def selected_server(self) -> str:
+        chosen = str(config.get("vpn_selected_server", ""))
+        names = [server.name for server in self.servers()]
+        if chosen in names:
+            return chosen
+        return names[0] if names else ""
 
     # --- стратегии -------------------------------------------------------
 

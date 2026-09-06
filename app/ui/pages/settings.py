@@ -37,7 +37,7 @@ class ThemeCard(QWidget):
         self.title = title
         self.colors = colors
         self.selected = False
-        self.accent = "#C41E4A"
+        self.accent = "#2563EB"
         self.setFixedSize(150, 104)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 

@@ -44,6 +44,9 @@ from app.ui.pages.home import HomePage
 from app.ui.pages.lists import ListsPage
 from app.ui.pages.settings import SettingsPage
 from app.ui.pages.strategies import StrategiesPage
+from app.ui.pages.servers import VpnPage
+from app.ui.pages.telegram import TelegramPage
+from app.ui.pages.vpnapps import VpnAppsPage
 from app.ui.pages.updates import UpdatesPage
 from app.ui.widgets import IconLabel, Toast
 
@@ -80,16 +83,19 @@ class MONITORINFO(ctypes.Structure):
 # В боковом меню видны только те разделы, куда заходят регулярно.
 # Остальные никуда не делись — они за кнопкой «Ещё».
 PRIMARY_PAGES = (
-    ("home", "Обзор", "shield_check"),
-    ("strategies", "Стратегии", "refresh"),
-    ("dns", "Smart DNS", "bolt"),
-    ("lists", "Списки сайтов", "list"),
-    ("diagnostics", "Диагностика", "stethoscope"),
+    ("home", "Обзор", "home"),
+    ("vpn", "VPN", "layers"),
+    ("telegram", "Telegram", "telegram"),
+    ("strategies", "Стратегии", "route"),
+    ("dns", "Smart DNS", "globe"),
+    ("diagnostics", "Диагностика", "activity"),
     ("settings", "Настройки", "settings"),
 )
 
 MORE_PAGES = (
-    ("updates", "Обновления", "download"),
+    ("vpnapps", "Программы VPN", "list"),
+    ("lists", "Списки сайтов", "list"),
+    ("updates", "Обновления", "cloud_download"),
     ("about", "О программе", "info"),
 )
 
@@ -298,6 +304,9 @@ class MainWindow(QWidget):
         # долго, и окно успевало показаться недостроенным.
         self._factories = {
             "home": HomePage,
+            "vpn": VpnPage,
+            "vpnapps": VpnAppsPage,
+            "telegram": TelegramPage,
             "dns": DnsPage,
             "strategies": StrategiesPage,
             "lists": ListsPage,
@@ -631,6 +640,8 @@ class MainWindow(QWidget):
 
     def _poll_state(self, force: bool = False) -> None:
         self.context.refresh_status(force=force)
+        self.context.refresh_tgws(force=force)
+        self.context.refresh_vpn_status(force=force)
         before = self.context.tunnels
         after = self.context.refresh_tunnels(force=force)
         if after != before:
@@ -679,6 +690,8 @@ class MainWindow(QWidget):
     # --- запуск и завершение ---------------------------------------------
 
     def _startup_tasks(self) -> None:
+        self._start_tgws_if_wanted()
+        self._start_vpn_if_wanted()
         updates_page = self.ensure_page("updates")
         if config.get("check_core_updates", True) and updater.is_check_due():
             checker = getattr(updates_page, "check_silently", None)
@@ -689,6 +702,35 @@ class MainWindow(QWidget):
             starter = getattr(home, "start_bypass", None)
             if callable(starter):
                 starter()
+
+    def _start_vpn_if_wanted(self) -> None:
+        """VPN поднимается сам, если его включали и не выключали."""
+        from app.core.vpn.engine import vpn_engine
+        from app.ui import vpn_actions
+
+        if not vpn_actions.desired_enabled() or vpn_engine.status().running:
+            return
+        if not self.context.servers():
+            return
+        self._vpn_start_worker = vpn_actions.start(self, self.context)
+
+    def _start_tgws_if_wanted(self) -> None:
+        """Прокси Telegram поднимается сам, если человек его включал."""
+        from app.core import tgws
+        from app.ui.widgets import Worker
+
+        if not tgws.desired_enabled() or tgws.tgws_engine.is_running():
+            return
+
+        def failed(message: str) -> None:
+            self.context.refresh_tgws(force=True)
+            self._show_toast(f"Прокси Telegram не запустился: {message}", "error")
+
+        worker = Worker(self)
+        worker.finished.connect(lambda _: self.context.refresh_tgws(force=True))
+        worker.failed.connect(failed)
+        worker.run(tgws.tgws_engine.start)
+        self._tgws_worker = worker
 
     def _restore_geometry(self) -> None:
         saved = str(config.get("window_geometry", ""))
@@ -768,6 +810,18 @@ class MainWindow(QWidget):
         self._force_quit = True
         self._save_geometry()
         logs.info("Выход из приложения")
+        try:
+            from app.core.tgws import tgws_engine
+
+            tgws_engine.stop()
+        except Exception as exc:  # noqa: BLE001
+            logs.warn(f"Прокси Telegram не остановился: {exc}")
+        try:
+            from app.core.vpn.engine import vpn_engine
+
+            vpn_engine.shutdown()
+        except Exception as exc:  # noqa: BLE001
+            logs.warn(f"VPN не остановился: {exc}")
         engine.shutdown(stop_running=False)
         self.tray.hide()
         application = QApplication.instance()

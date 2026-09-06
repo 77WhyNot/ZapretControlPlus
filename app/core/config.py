@@ -12,8 +12,9 @@ from app.core.constants import CONFIG_VERSION
 DEFAULTS: dict[str, Any] = {
     "config_version": CONFIG_VERSION,
     # Внешний вид
-    "theme": "rails",             # см. ui/theme.py
-    "accent": "ruby",
+    "theme": "light",             # см. ui/theme.py
+    "accent": "sapphire",
+    "accent_migrated_blue": False,  # разовый перевод старого рубина на синий
     "last_dark_theme": "rails",   # куда возвращает кнопка «тёмная» в заголовке
     # Поведение
     "run_mode": "service",        # service | process
@@ -39,9 +40,33 @@ DEFAULTS: dict[str, Any] = {
     # Telegram
     "telegram_bypass": False,
     "telegram_mode": "split",
+    # Telegram через WebSocket-прокси (ядро tg-ws-proxy внутри программы)
+    "tg_ws_enabled": False,       # желаемое состояние: поднимать при запуске
+    "tg_ws_port": 1443,
+    "tg_ws_secret": "",           # создаётся один раз, иначе ссылка в Telegram устареет
     # Сосуществование со сторонним VPN (Happ, Hiddify, WireGuard и др.)
     "pause_zapret_with_vpn": True,   # снимать обход, пока поднят чужой туннель
     "zapret_paused_by_vpn": False,   # обход снят нами — вернуть после VPN
+    # VPN (sing-box внутри программы)
+    "vpn_subscription_url": "",
+    "vpn_selected_server": "",
+    "vpn_transport": "tun",         # tun — туннель по программам | proxy — без конфликтов
+    "vpn_mode": "selected",         # selected | except | all
+    "vpn_apps": [],                 # программы, которым нужен туннель
+    "vpn_direct_apps": [],          # программы в обход туннеля
+    "vpn_stack": "mixed",           # стек TUN: mixed | system | gvisor
+    "vpn_strict_route": False,
+    "vpn_ipv6": False,
+    "vpn_mtu": 9000,
+    "vpn_dns_through_tunnel": False,
+    "vpn_dns_server": "1.1.1.1",
+    "vpn_bypass_lan": True,
+    "vpn_autostart": False,         # поднимать VPN вместе с программой
+    "vpn_auto_exclude": True,       # адреса серверов — в исключения zapret
+    "vpn_managed_excludes": [],
+    "vpn_last_update": 0,
+    "vpn_proxy_port": 10808,
+    "vpn_proxy_backup": {},         # системный прокси до нас (режим «Прокси»)
     # Прочее
     "first_run": True,
     "window_geometry": "",
@@ -99,6 +124,20 @@ class Config:
             for key, value in raw.items():
                 if key in DEFAULTS:
                     self._data[key] = value
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Разовые правки уже сохранённых настроек."""
+        changed = False
+        # Основной цвет программы стал синим. Рубин был цветом по умолчанию,
+        # который никто не выбирал осознанно, — переводим его один раз.
+        if not self._data.get("accent_migrated_blue"):
+            if self._data.get("accent") == "ruby":
+                self._data["accent"] = "sapphire"
+            self._data["accent_migrated_blue"] = True
+            changed = True
+        if changed:
+            self.save()
 
     def raw(self) -> dict[str, Any]:
         """Файл настроек как есть, вместе с ключами прошлых версий.

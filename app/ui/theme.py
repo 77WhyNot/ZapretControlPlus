@@ -209,7 +209,7 @@ def resolve_theme_key(key: str) -> str:
 
 def build_tokens(theme_key: str, accent_key: str) -> dict[str, str]:
     theme = THEME_BY_KEY[resolve_theme_key(theme_key)]
-    accent = ACCENT_BY_KEY.get(accent_key, ACCENT_BY_KEY["ruby"])
+    accent = ACCENT_BY_KEY.get(accent_key, ACCENT_BY_KEY["sapphire"])
 
     tokens = dict(theme.colors)
     tokens.update({
@@ -230,19 +230,27 @@ def build_tokens(theme_key: str, accent_key: str) -> dict[str, str]:
     # Цвета маршрутов — это не украшение, а способ читать состояние:
     # один и тот же цвет означает один и тот же путь трафика во всей программе.
     tokens["lane_direct"] = "#7C8AA0" if theme.dark else "#68758A"
-    tokens["lane_zapret"] = "#E63862" if theme.dark else "#C41E4A"
-    tokens["lane_dns"] = "#22C6D8" if theme.dark else "#0E93A6"
+    # Обход — главный инструмент, он носит цвет программы (акцент).
+    # Остальные — своя холодная гамма: Telegram — небесный, DNS — бирюза.
+    tokens["lane_zapret"] = tokens["accent"]
+    tokens["lane_dns"] = "#2DD4BF" if theme.dark else "#0F9D8A"
+    tokens["lane_tg"] = "#38BDF8" if theme.dark else "#1A9BD7"
     # Чужой туннель — намеренно приглушённый: это не наш инструмент,
     # мы им не управляем и только сообщаем, что он поднят.
-    tokens["lane_vpn"] = "#8B7BD8" if theme.dark else "#6A57C4"
+    tokens["lane_vpn"] = "#A78BFA" if theme.dark else "#7C3AED"
+    tokens["lane_foreign"] = "#8B7BD8" if theme.dark else "#8A7FB8"
     tokens["lane_direct_soft"] = mix(theme.colors["surface"], tokens["lane_direct"],
                                      0.18 if theme.dark else 0.12)
     tokens["lane_zapret_soft"] = mix(theme.colors["surface"], tokens["lane_zapret"],
                                      0.18 if theme.dark else 0.10)
     tokens["lane_dns_soft"] = mix(theme.colors["surface"], tokens["lane_dns"],
                                   0.18 if theme.dark else 0.10)
+    tokens["lane_tg_soft"] = mix(theme.colors["surface"], tokens["lane_tg"],
+                                 0.18 if theme.dark else 0.10)
     tokens["lane_vpn_soft"] = mix(theme.colors["surface"], tokens["lane_vpn"],
                                   0.18 if theme.dark else 0.10)
+    tokens["lane_foreign_soft"] = mix(theme.colors["surface"], tokens["lane_foreign"],
+                                      0.18 if theme.dark else 0.10)
     return tokens
 
 
@@ -362,7 +370,18 @@ QLabel[role="mono"], QPlainTextEdit[role="mono"] {{
 QLabel[lane="direct"] {{ color: {lane_direct}; }}
 QLabel[lane="zapret"] {{ color: {lane_zapret}; }}
 QLabel[lane="dns"] {{ color: {lane_dns}; }}
+QLabel[lane="tg"] {{ color: {lane_tg}; }}
+
+/* ---------- Раскрывающийся раздел ---------- */
+
+QFrame#CollapsibleHeader {{
+    background: {surface};
+    border: 1px solid {border};
+    border-radius: 12px;
+}}
+QFrame#CollapsibleHeader:hover {{ border-color: {border_strong}; background: {surface_alt}; }}
 QLabel[lane="vpn"] {{ color: {lane_vpn}; }}
+QLabel[lane="foreign"] {{ color: {lane_foreign}; }}
 QLabel#PageSubtitle {{
     font-size: 13px;
     color: {text_dim};

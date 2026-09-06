@@ -89,6 +89,40 @@ def _selftest() -> int:
     print(f"целей: {len(autotest.load_targets())}")
     print(f"проверок: {len(diagnostics.ALL_CHECKS)}")
 
+    # Прокси Telegram: в собранном виде должны найтись и вшитое ядро, и AES.
+    # Порт берём свободный: обычный 1443 может держать установленная копия.
+    import socket
+
+    from app.core import tgws
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        config.set("tg_ws_port", probe.getsockname()[1], save=False)
+    tgws.tgws_engine.start()
+    print(f"прокси Telegram: {'ок' if tgws.tgws_engine.is_running() else 'НЕ ЗАПУСТИЛСЯ'}")
+    tgws.tgws_engine.stop()
+    if tgws.tgws_engine.is_running():
+        raise SystemExit("прокси Telegram не остановился")
+
+    # Движок VPN: должен лежать рядом и принимать наш конфиг.
+    import json
+
+    from app.core.vpn import config as vpn_config
+    from app.core.vpn.engine import singbox_path, vpn_engine
+    from app.core.vpn.links import parse_link
+
+    probe = parse_link("vless://11111111-2222-3333-4444-555555555555@example.org:443"
+                       "?security=tls&type=tcp&sni=example.org#Проверка")
+    if not singbox_path().exists():
+        raise SystemExit("движок VPN (sing-box.exe) не найден")
+    vpn_engine.config_path.write_text(json.dumps(vpn_config.build_config(
+        [probe], transport=vpn_config.TRANSPORT_PROXY, clash_secret="t", proxy_port=18080,
+    )), encoding="utf-8")
+    problem = vpn_engine.validate_config()
+    print(f"движок VPN: {'ок' if not problem else problem}")
+    if problem:
+        raise SystemExit(problem)
+
     window = MainWindow()
     for key, title, _ in PAGES:
         window.show_page(key)
@@ -167,6 +201,17 @@ def main() -> int:
             logs.info("Возвращены сетевые адаптеры: " + ", ".join(restored))
     except Exception as exc:  # noqa: BLE001
         logs.warn(f"Не удалось вернуть сетевые адаптеры: {exc}")
+
+    # Своё наследство прошлого запуска: движок VPN, свой адаптер,
+    # системный прокси. Чужое не трогаем.
+    try:
+        from app.core.vpn.engine import vpn_engine
+
+        fixed = vpn_engine.restore_leftovers()
+        if fixed:
+            logs.info("Прибрано после прошлого запуска: " + ", ".join(fixed))
+    except Exception as exc:  # noqa: BLE001
+        logs.warn(f"Не удалось прибрать за прошлым запуском: {exc}")
 
     step("Проверка файлов ядра…", 0.15)
     if not paths.core_is_valid():

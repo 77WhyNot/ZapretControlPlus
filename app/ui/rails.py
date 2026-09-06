@@ -195,8 +195,10 @@ class RailsBoard(QWidget):
         for key, title, token in (
             ("direct", "Напрямую", "lane_direct"),
             ("zapret", "Zapret", "lane_zapret"),
+            ("tg", "Telegram", "lane_tg"),
             ("dns", "Smart DNS", "lane_dns"),
-            ("vpn", "Чужой VPN", "lane_vpn"),
+            ("vpn", "VPN", "lane_vpn"),
+            ("foreign", "Чужой VPN", "lane_foreign"),
         ):
             lane = LaneRow(context, key, title, token)
             lane.clicked.connect(self.lane_clicked.emit)
@@ -207,16 +209,22 @@ class RailsBoard(QWidget):
 
     def update_state(self, zapret_on: bool, zapret_targets: list[str],
                      dns_on: bool, dns_note: str,
-                     tunnels: list[str], direct_note: str) -> None:
+                     tunnels: list[str], direct_note: str,
+                     tg_on: bool = False, tg_note: str = "",
+                     vpn_on: bool = False, vpn_chips: list[str] | None = None) -> None:
         self.lanes["direct"].set_active(True)
         self.lanes["direct"].set_chips([direct_note] if direct_note else [])
         self.lanes["zapret"].set_active(zapret_on)
         self.lanes["zapret"].set_chips(zapret_targets)
+        self.lanes["tg"].set_active(tg_on)
+        self.lanes["tg"].set_chips([tg_note] if tg_on and tg_note else [])
         self.lanes["dns"].set_active(dns_on)
         self.lanes["dns"].set_chips([dns_note] if dns_on and dns_note else [])
+        self.lanes["vpn"].set_active(vpn_on)
+        self.lanes["vpn"].set_chips(list(vpn_chips or []) if vpn_on else [])
         # Чужой туннель мы не включаем и не выключаем — только показываем.
-        self.lanes["vpn"].set_active(bool(tunnels))
-        self.lanes["vpn"].set_chips(tunnels)
+        self.lanes["foreign"].set_active(bool(tunnels))
+        self.lanes["foreign"].set_chips(tunnels)
 
     def apply_theme(self) -> None:
         faint = self.context.color("text_faint")

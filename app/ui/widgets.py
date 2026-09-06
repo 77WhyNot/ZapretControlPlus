@@ -165,7 +165,7 @@ class Switch(QWidget):
         super().__init__(parent)
         self._checked = checked
         self._offset = 1.0 if checked else 0.0
-        self._track_on = QColor("#C41E4A")
+        self._track_on = QColor("#2563EB")
         self._track_off = QColor("#CDD4DE")
         self._knob = QColor("#FFFFFF")
         self.setFixedSize(42, 24)
@@ -343,7 +343,7 @@ class Toast(QFrame):
 class Spinner(QWidget):
     """Круговой индикатор занятости."""
 
-    def __init__(self, size: int = 18, color: str = "#C41E4A",
+    def __init__(self, size: int = 18, color: str = "#2563EB",
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._angle = 0
@@ -460,3 +460,109 @@ class Worker(QObject):
 
     def busy(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+
+class _CollapsibleHeader(QFrame):
+    """Заголовок раскрывающегося раздела: вся полоса — кнопка."""
+
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
+class Collapsible(QWidget):
+    """Раскрывающийся раздел: заголовок-кнопка и содержимое, которое
+    плавно выезжает. Сюда прячем то, что нужно редко, но должно быть рядом."""
+
+    toggled = Signal(bool)
+    MAX_HEIGHT = 16777215
+
+    def __init__(self, title: str, context, expanded: bool = False,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.context = context
+        self._expanded = expanded
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
+
+        # Не QPushButton: кнопка не учитывает высоту вложенной компоновки
+        # и схлопывается в полоску. Обычная рамка с обработкой клика надёжнее.
+        self.header = _CollapsibleHeader(self)
+        self.header.setObjectName("CollapsibleHeader")
+        self.header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header.clicked.connect(self.toggle)
+        row = QHBoxLayout(self.header)
+        row.setContentsMargins(14, 10, 14, 10)
+        row.setSpacing(10)
+        self.chevron = IconLabel("chevron_right", context.color("text_dim"), 16, self.header)
+        row.addWidget(self.chevron)
+        self.title_label = QLabel(title, self.header)
+        self.title_label.setStyleSheet("font-weight: 600; background: transparent;")
+        row.addWidget(self.title_label)
+        row.addStretch(1)
+        self.hint = QLabel("", self.header)
+        self.hint.setObjectName("Faint")
+        self.hint.setStyleSheet("background: transparent;")
+        row.addWidget(self.hint)
+        outer.addWidget(self.header)
+
+        self.content = QWidget(self)
+        self.body = QVBoxLayout(self.content)
+        self.body.setContentsMargins(0, 2, 0, 0)
+        self.body.setSpacing(14)
+        outer.addWidget(self.content)
+        self.content.setMaximumHeight(self.MAX_HEIGHT if expanded else 0)
+        self.content.setVisible(expanded)
+
+        self._animation = QPropertyAnimation(self.content, b"maximumHeight", self)
+        self._animation.setDuration(240)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.finished.connect(self._animation_done)
+        self._sync_chevron()
+
+    def set_hint(self, text: str) -> None:
+        self.hint.setText(text)
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def toggle(self) -> None:
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, value: bool, animate: bool = True) -> None:
+        if value == self._expanded:
+            return
+        self._expanded = value
+        self._animation.stop()
+        if not animate:
+            self.content.setMaximumHeight(self.MAX_HEIGHT if value else 0)
+            self.content.setVisible(value)
+        elif value:
+            self.content.setMaximumHeight(0)
+            self.content.setVisible(True)
+            self._animation.setStartValue(0)
+            self._animation.setEndValue(self.content.sizeHint().height())
+            self._animation.start()
+        else:
+            self._animation.setStartValue(self.content.height())
+            self._animation.setEndValue(0)
+            self._animation.start()
+        self._sync_chevron()
+        self.toggled.emit(value)
+
+    def _animation_done(self) -> None:
+        if self._expanded:
+            self.content.setMaximumHeight(self.MAX_HEIGHT)
+        else:
+            self.content.setVisible(False)
+
+    def _sync_chevron(self) -> None:
+        self.chevron.set_icon("chevron_down" if self._expanded else "chevron_right")
+
+    def apply_theme(self) -> None:
+        self.chevron.set_color(self.context.color("text_dim"))

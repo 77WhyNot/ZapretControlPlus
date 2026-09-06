@@ -19,7 +19,7 @@ AppPublisherURL={#AppUrl}
 AppSupportURL={#AppUrl}/issues
 AppUpdatesURL={#AppUrl}/releases
 VersionInfoVersion={#AppVersion}
-VersionInfoDescription={#AppName} — обход блокировок и Smart DNS
+VersionInfoDescription={#AppName} — обход блокировок, VPN и Smart DNS
 
 DefaultDirName={autopf}\Zapret Control Plus
 DefaultGroupName={#AppName}
@@ -62,13 +62,17 @@ Name: "autostart"; Description: "Запускать программу вмес�
 
 [Files]
 Source: "..\dist\ZapretControlPlus\*"; DestDir: "{app}"; \
-    Excludes: "core"; \
+    Excludes: "core,singbox"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Ядро zapret. onlyifdoesntexist бережёт списки пользователя и то ядро,
 ; которое программа уже обновила сама из GitHub.
 Source: "..\payload\zapret\*"; DestDir: "{app}\core"; \
     Flags: onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
+
+; Движок VPN. Обновляется только вместе с программой, поэтому ignoreversion.
+Source: "..\payload\singbox\*"; DestDir: "{app}\singbox"; \
+    Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -93,6 +97,10 @@ Filename: "{sys}\sc.exe"; Parameters: "delete zapret"; \
     Flags: runhidden; RunOnceId: "delsvc"
 Filename: "{sys}\taskkill.exe"; Parameters: "/f /im winws.exe"; \
     Flags: runhidden; RunOnceId: "killwinws"
+; Только свой sing-box — по пути к файлу, чужой клиент не трогаем.
+Filename: "powershell.exe"; \
+    Parameters: "-NoProfile -NonInteractive -Command ""Get-Process sing-box -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '{app}\singbox\*' } | Stop-Process -Force"""; \
+    Flags: runhidden; RunOnceId: "killsingbox"
 Filename: "{sys}\sc.exe"; Parameters: "stop WinDivert"; \
     Flags: runhidden; RunOnceId: "stopwd"
 Filename: "{sys}\sc.exe"; Parameters: "delete WinDivert"; \
@@ -102,6 +110,7 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/delete /f /tn ""ZapretControlPlus 
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\core"
+Type: filesandordirs; Name: "{app}\singbox"
 Type: filesandordirs; Name: "{app}\_internal"
 Type: dirifempty; Name: "{app}"
 
@@ -225,12 +234,13 @@ begin
     Sleep(1200);
   end;
 
-  { Наследство версий 2.x: свой движок VPN. Процессы при этом не трогаем —
-    одноимённый sing-box.exe принадлежит чужому клиенту (Happ и подобным),
-    и снимать его мы не вправе. }
-  Legacy := ExpandConstant('{app}\singbox');
-  if DirExists(Legacy) then
-    DelTree(Legacy, True, True, True);
+  { Свой движок VPN снимаем только по пути к файлу: одноимённый sing-box.exe
+    может принадлежать чужому клиенту (Happ и подобным), и трогать его нельзя. }
+  Legacy := ExpandConstant('{app}') + '\singbox\*';
+  Exec('powershell.exe',
+       '-NoProfile -NonInteractive -Command "Get-Process sing-box -ErrorAction SilentlyContinue | '
+       + 'Where-Object { $_.Path -like ''' + Legacy + ''' } | Stop-Process -Force"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   { Библиотеки Qt между версиями меняются — старую папку чистим целиком. }
   Internal := ExpandConstant('{app}\_internal');

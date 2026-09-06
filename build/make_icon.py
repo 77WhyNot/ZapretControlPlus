@@ -11,8 +11,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 SIZE = 1024
-RUBY_LIGHT = (222, 46, 92)
-RUBY_DARK = (150, 18, 55)
+BLUE_LIGHT = (59, 118, 240)
+BLUE_DARK = (24, 58, 168)
 OUTPUT_SIZES = (16, 20, 24, 32, 48, 64, 128, 256)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,7 +60,7 @@ def build_icon() -> Image.Image:
     mask = Image.new("L", (SIZE, SIZE), 0)
     ImageDraw.Draw(mask).polygon(shield_polygon(SIZE), fill=255)
 
-    body = vertical_gradient(SIZE, RUBY_LIGHT, RUBY_DARK).convert("RGBA")
+    body = vertical_gradient(SIZE, BLUE_LIGHT, BLUE_DARK).convert("RGBA")
     canvas.paste(body, (0, 0), mask)
 
     # Мягкий блик по верхней части щита — даёт объём.

@@ -19,8 +19,8 @@ TARGET_DIR = ROOT / "build" / "art"
 BANNER_SIZE = (492, 942)
 SMALL_SIZE = (165, 165)
 
-TOP = (28, 12, 24)
-BOTTOM = (150, 18, 55)
+TOP = (10, 16, 36)
+BOTTOM = (29, 78, 216)
 
 
 def gradient(size: tuple[int, int]) -> Image.Image:
@@ -47,7 +47,7 @@ def make_banner() -> Image.Image:
     canvas = Image.alpha_composite(
         canvas,
         Image.composite(
-            Image.new("RGBA", BANNER_SIZE, (255, 120, 150, 255)),
+            Image.new("RGBA", BANNER_SIZE, (130, 175, 255, 255)),
             Image.new("RGBA", BANNER_SIZE, (0, 0, 0, 0)),
             glow,
         ),

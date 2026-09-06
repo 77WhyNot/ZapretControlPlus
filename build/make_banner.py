@@ -17,9 +17,9 @@ sys.path.insert(0, str(ROOT / "build"))
 from make_icon import build_icon  # noqa: E402
 
 SIZE = (1280, 420)
-TOP = (16, 8, 14)
-BOTTOM = (96, 12, 40)
-RUBY = (212, 34, 80)
+TOP = (8, 12, 28)
+BOTTOM = (22, 52, 150)
+BLUE = (59, 118, 240)
 
 TARGET = ROOT / "docs" / "banner.png"
 
@@ -55,7 +55,7 @@ def build() -> Image.Image:
     )
     glow = glow.filter(ImageFilter.GaussianBlur(90))
     canvas = Image.alpha_composite(canvas, Image.composite(
-        Image.new("RGBA", SIZE, (*RUBY, 255)),
+        Image.new("RGBA", SIZE, (*BLUE, 255)),
         Image.new("RGBA", SIZE, (0, 0, 0, 0)),
         glow,
     ))
@@ -83,13 +83,13 @@ def build() -> Image.Image:
     draw.text((left, 122), "Zapret Control+", font=title_font, fill=(255, 255, 255))
     draw.text(
         (left, 232),
-        "Обход блокировок Discord, YouTube и Telegram — в одном окне",
-        font=sub_font, fill=(240, 212, 220),
+        "Обход блокировок, VPN и Telegram — в одном окне",
+        font=sub_font, fill=(214, 226, 250),
     )
     draw.text(
         (left, 286),
-        "zapret · Smart DNS для Xbox · Telegram · автообновление",
-        font=small_font, fill=(206, 158, 174),
+        "zapret · VPN по программам · Telegram · Smart DNS",
+        font=small_font, fill=(160, 190, 240),
     )
     return canvas.convert("RGB")
 

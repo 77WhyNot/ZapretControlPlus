@@ -1,11 +1,16 @@
-"""Обзор: выключатель обхода, Smart DNS, фильтры и проверка доступности."""
+"""Обзор: три переключателя, схема маршрутов и проверка доступности.
+
+Всё редкое — фильтры, перезапуск — спрятано в раскрывающийся раздел
+«Дополнительно», чтобы обычному человеку хватало одного экрана.
+"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -17,6 +22,8 @@ from app.core import autotest, winapi
 from app.core.config import config
 from app.core.engine import engine
 from app.core.strategies import GAME_FILTER_LABELS
+from app.core.vpn import config as vpn_config
+from app.ui import tgws_actions, vpn_actions
 from app.ui.context import AppContext
 from app.ui.pages.base import Banner, Page
 from app.ui.rails import RailsBoard
@@ -24,7 +31,9 @@ from app.ui.widgets import (
     clear_layout,
     Button,
     Card,
+    Collapsible,
     Divider,
+    IconLabel,
     Spinner,
     StatItem,
     Switch,
@@ -33,6 +42,61 @@ from app.ui.widgets import (
     section_label,
 )
 
+# Smart DNS на главной — это один переключатель: включить сервис для Xbox
+# или вернуть как было. Остальные сервисы выбираются на своей вкладке.
+DNS_DEFAULT_PRESET = "xbox"
+
+
+class ToolCard(Card):
+    """Карточка инструмента: заголовок, переключатель, пояснение, кнопка."""
+
+    def __init__(self, context: AppContext, icon_name: str, title: str,
+                 text: str, lane_token: str) -> None:
+        super().__init__(padding=18, spacing=10)
+        self.context = context
+        self.lane_token = lane_token
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        self.icon = IconLabel(icon_name, context.color(lane_token), 20)
+        head.addWidget(self.icon)
+        head.addWidget(section_label(title))
+        head.addStretch(1)
+        self.spinner = Spinner(15, context.color(lane_token))
+        head.addWidget(self.spinner)
+        self.switch = Switch(False)
+        head.addWidget(self.switch)
+        self.add_layout(head)
+
+        self.text = faint_label(text)
+        self.add(self.text)
+
+        self.state = faint_label("", wrap=False)
+        self.add(self.state)
+
+        self.action = Button("", variant="soft")
+        self.add(self.action)
+
+    def set_checked(self, value: bool) -> None:
+        self.switch.blockSignals(True)
+        self.switch.setChecked(value, animate=False)
+        self.switch.blockSignals(False)
+
+    def set_busy(self, busy: bool) -> None:
+        self.switch.setEnabled(not busy)
+        if busy:
+            self.spinner.start()
+        else:
+            self.spinner.stop()
+
+    def apply_theme(self) -> None:
+        color = self.context.color(self.lane_token)
+        self.icon.set_color(color)
+        self.spinner.set_color(color)
+        self.switch.set_colors(
+            color, self.context.color("border_strong"), self.context.color("surface")
+        )
+
 
 class HomePage(Page):
     def __init__(self, context: AppContext,
@@ -40,21 +104,32 @@ class HomePage(Page):
         super().__init__(
             context,
             "Обзор",
-            "Два способа вернуть доступ: zapret ломает распознавание домена "
-            "у провайдера, Smart DNS обходит блокировку по стране.",
+            "Включите то, что не работает: сайты и Discord — обход, Telegram — "
+            "прокси, Xbox и сервисы с блокировкой по стране — Smart DNS.",
             parent,
         )
         self._busy_zapret = False
-        self._check_worker = None
+        self._busy_dns = False
+        self._busy_tg = False
+        self._busy_vpn = False
+        self._vpn_worker: Worker | None = None
+        self._check_worker: Worker | None = None
+        self._tg_worker: Worker | None = None
+        self._dns_worker: Worker | None = None
+        self._pending_updates: dict[str, object] = {}
+        self._row_animations: list[QPropertyAnimation] = []
 
         self._build_banners()
-        self._build_rails()
-        self._build_controls()
-        self._build_filters()
-        self._build_stats()
+        self._build_hero()
+        self._build_tools()
+        self._build_check()
+        self._build_more()
 
         context.status_changed.connect(lambda _: self._refresh())
         context.tunnels_changed.connect(lambda _: self._refresh())
+        context.tgws_changed.connect(lambda _: self._refresh())
+        context.vpn_status_changed.connect(lambda _: self._refresh())
+        context.servers_changed.connect(self._refresh)
         context.strategies_changed.connect(self._refresh)
         context.update_available.connect(self._update_available)
 
@@ -64,7 +139,7 @@ class HomePage(Page):
 
         self.apply_theme()
 
-    # --- построение ------------------------------------------------------
+    # --- плашки -----------------------------------------------------------
 
     def _build_banners(self) -> None:
         self.banner_admin = Banner(
@@ -76,8 +151,7 @@ class HomePage(Page):
         self.body.addWidget(self.banner_admin)
         self.banner_admin.setVisible(not winapi.is_admin())
 
-        # Чужой туннель — не ошибка. Программа просто объясняет, что при
-        # включённом VPN обход не нужен, и предлагает снять его одной кнопкой.
+        # Чужой туннель — не ошибка: объясняем и даём кнопку.
         self.banner_tunnel = Banner(
             self.context, "globe", "", kind="warn", action_text="Выключить обход",
         )
@@ -85,23 +159,23 @@ class HomePage(Page):
         self.body.addWidget(self.banner_tunnel)
         self.banner_tunnel.setVisible(False)
 
-        # Найденное обновление не должно лежать незамеченным на вкладке
-        # из меню «Ещё» — показываем прямо здесь, с кнопкой.
-        self._pending_updates: dict[str, object] = {}
+        # Найденное обновление показываем здесь, а не на вкладке из «Ещё».
         self.banner_update = Banner(
-            self.context, "download", "", kind="info", action_text="Установить",
+            self.context, "cloud_download", "", kind="info", action_text="Установить",
         )
         self.banner_update.action.clicked.connect(self._install_pending)
         self.body.addWidget(self.banner_update)
         self.banner_update.setVisible(False)
 
-    def _build_rails(self) -> None:
-        card = Card(padding=22, spacing=16)
+    # --- главная карточка --------------------------------------------------
+
+    def _build_hero(self) -> None:
+        card = Card(padding=22, spacing=14)
 
         top = QHBoxLayout()
         top.setSpacing(14)
         self.state_title = QLabel("Всё идёт напрямую")
-        font = QFont("Bahnschrift", 16)
+        font = QFont("Bahnschrift", 17)
         font.setWeight(QFont.Weight.DemiBold)
         self.state_title.setFont(font)
         top.addWidget(self.state_title)
@@ -119,104 +193,109 @@ class HomePage(Page):
 
         self.body.addWidget(card)
 
-    def _build_controls(self) -> None:
-        """Два инструмента рядом: обход и DNS. Оба включаются здесь."""
-        from app.core import dnsctl
+    # --- три инструмента ---------------------------------------------------
 
-        row = QHBoxLayout()
-        row.setSpacing(16)
+    def _build_tools(self) -> None:
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
 
-        # --- zapret ---
-        zapret_card = Card(padding=20, spacing=12)
-        head = QHBoxLayout()
-        head.setSpacing(10)
-        head.addWidget(section_label("Обход DPI (zapret)"))
-        head.addStretch(1)
-        self.switch_zapret = Switch(False)
-        self.switch_zapret.toggled.connect(self._toggle_zapret)
-        head.addWidget(self.switch_zapret)
-        zapret_card.add_layout(head)
-
-        zapret_card.add(faint_label(
-            "Ломает распознавание домена у провайдера. Работает сразу для "
-            "всей системы, выбирать программы не нужно, скорость не падает."
-        ))
-
-        self.btn_strategy = Button("Основная")
-        self.btn_strategy.clicked.connect(
+        self.card_zapret = ToolCard(
+            self.context, "shield_check", "Обход DPI",
+            "Сайты, YouTube и Discord. Работает сразу для всей системы, "
+            "скорость не падает.", "lane_zapret",
+        )
+        self.card_zapret.switch.toggled.connect(self._toggle_zapret)
+        self.card_zapret.action.setText("Стратегия")
+        self.card_zapret.action.clicked.connect(
             lambda: self.context.navigate.emit("strategies")
         )
-        zapret_card.add(self.btn_strategy)
-        row.addWidget(zapret_card, 1)
+        grid.addWidget(self.card_zapret, 0, 0)
 
-        # --- smart dns ---
-        dns_card = Card(padding=20, spacing=12)
-        head_dns = QHBoxLayout()
-        head_dns.setSpacing(10)
-        head_dns.addWidget(section_label("Smart DNS"))
-        head_dns.addStretch(1)
-        self.dns_state = faint_label("", wrap=False)
-        head_dns.addWidget(self.dns_state)
-        dns_card.add_layout(head_dns)
-
-        dns_card.add(faint_label(
-            "Возвращает доступ к Xbox Live, Game Pass и сервисам, которые "
-            "режут по стране. Работает вместе с обходом и не мешает VPN."
-        ))
-
-        self.dns_box = QComboBox()
-        for preset in dnsctl.PRESETS:
-            self.dns_box.addItem(preset.title, preset.key)
-        self.dns_box.currentIndexChanged.connect(self._change_dns)
-        dns_card.add(self.dns_box)
-        row.addWidget(dns_card, 1)
-
-        self.body.addLayout(row)
-        self._sync_dns()
-
-    def _sync_dns(self) -> None:
-        from app.core import dnsctl
-
-        current = dnsctl.current_preset()
-        self.dns_box.blockSignals(True)
-        index = self.dns_box.findData(current)
-        if index >= 0:
-            self.dns_box.setCurrentIndex(index)
-        self.dns_box.blockSignals(False)
-        self.dns_state.setText(
-            "выключен" if current == "auto" else "включён"
+        self.card_vpn = ToolCard(
+            self.context, "layers", "VPN",
+            "Ваша подписка: туннель для выбранных программ или прокси без "
+            "конфликтов с другим VPN.", "lane_vpn",
         )
+        self.card_vpn.switch.toggled.connect(self._toggle_vpn)
+        self.card_vpn.action.setText("Серверы")
+        self.card_vpn.action.clicked.connect(lambda: self.context.navigate.emit("vpn"))
+        grid.addWidget(self.card_vpn, 0, 1)
 
-    def _change_dns(self) -> None:
-        from app.core import dnsctl
+        self.card_tg = ToolCard(
+            self.context, "telegram", "Telegram",
+            "Прокси внутри программы: включите и нажмите «Открыть в Telegram».",
+            "lane_tg",
+        )
+        self.card_tg.switch.toggled.connect(self._toggle_tg)
+        self.card_tg.action.setText("Открыть в Telegram")
+        self.card_tg.action.clicked.connect(self._open_telegram)
+        grid.addWidget(self.card_tg, 1, 0)
 
-        key = str(self.dns_box.currentData())
-        worker = Worker(self)
-        worker.finished.connect(self._dns_done)
-        worker.failed.connect(lambda message: self.context.error(str(message)))
-        worker.run(dnsctl.apply_preset, key)
-        self._dns_worker = worker
+        self.card_dns = ToolCard(
+            self.context, "globe", "Smart DNS",
+            "Xbox Live, Game Pass и сервисы, закрытые по стране. "
+            "Не мешает обходу и VPN.", "lane_dns",
+        )
+        self.card_dns.switch.toggled.connect(self._toggle_dns)
+        self.card_dns.action.setText("Другой сервис")
+        self.card_dns.action.clicked.connect(lambda: self.context.navigate.emit("dns"))
+        grid.addWidget(self.card_dns, 1, 1)
 
-    def _dns_done(self, message) -> None:
-        self.context.ok(str(message))
-        self._sync_dns()
-        self._refresh()
+        self.body.addLayout(grid)
 
-    def _build_filters(self) -> None:
-        """Игровой фильтр и IPSet — те же два пункта, что в консольном меню."""
+    # --- проверка ----------------------------------------------------------
+
+    def _build_check(self) -> None:
+        card = Card(padding=18, spacing=14)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(26)
+        grid.setVerticalSpacing(10)
+        self.stat_zapret = StatItem("Обход", "выключен")
+        self.stat_vpn = StatItem("VPN", "выключен")
+        self.stat_tg = StatItem("Telegram", "выключен")
+        self.stat_dns = StatItem("Smart DNS", "выключен")
+        self.stat_uptime = StatItem("Время работы", "—")
+        for column, item in enumerate((
+            self.stat_zapret, self.stat_vpn, self.stat_tg, self.stat_dns, self.stat_uptime
+        )):
+            grid.addWidget(item, 0, column)
+        grid.setColumnStretch(5, 1)
+        card.add_layout(grid)
+
+        card.add(Divider())
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        self.check_spinner = Spinner(16, self.context.color("accent"))
+        actions.addWidget(self.check_spinner)
+        self.btn_check = Button("Проверить доступность", variant="primary")
+        self.btn_check.clicked.connect(self._run_check)
+        actions.addWidget(self.btn_check)
+        self.btn_diag = Button("Диагностика", variant="ghost")
+        self.btn_diag.clicked.connect(lambda: self.context.navigate.emit("diagnostics"))
+        actions.addWidget(self.btn_diag)
+        actions.addStretch(1)
+        card.add_layout(actions)
+
+        self.check_results = QVBoxLayout()
+        self.check_results.setSpacing(6)
+        card.add_layout(self.check_results)
+
+        self.body.addWidget(card)
+
+    # --- дополнительно -----------------------------------------------------
+
+    def _build_more(self) -> None:
+        """Игровой фильтр, IPSet и перезапуск — в одном клике, но не на виду."""
         from app.core import lists as lists_module
         from app.ui.widgets import SettingRow
 
-        card = Card(padding=18, spacing=12)
+        self.more = Collapsible("Дополнительно", self.context)
+        self.more.set_hint("игровой фильтр · IPSet · перезапуск")
 
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        header.addWidget(section_label("Фильтры zapret"))
-        header.addStretch(1)
-        self.filters_hint = faint_label("применяются после перезапуска обхода",
-                                        wrap=False)
-        header.addWidget(self.filters_hint)
-        card.add_layout(header)
+        card = Card(padding=18, spacing=12)
 
         self.game_box = QComboBox()
         for key, label in GAME_FILTER_LABELS.items():
@@ -225,11 +304,10 @@ class HomePage(Page):
         card.add(SettingRow(
             "Игровой фильтр",
             "Расширяет обход на порты 1024–65535, чтобы заработали игры и "
-            "голосовые сервисы. Нагрузка растёт, а часть программ может начать "
-            "сбоить — включайте, если без него игры не работают.",
+            "голосовые сервисы. Нагрузка растёт, часть программ может сбоить — "
+            "включайте, если без него игры не работают.",
             self.game_box,
         ))
-
         card.add(Divider())
 
         self.ipset_box = QComboBox()
@@ -239,12 +317,23 @@ class HomePage(Page):
         card.add(SettingRow(
             "Фильтр по IP (IPSet)",
             "Список подсетей заблокированных сервисов — нужен там, где домен "
-            "определить нельзя, например для голосовых серверов Discord. "
-            "«Без ограничений» отключает проверку по списку.",
+            "определить нельзя, например для голосовых серверов Discord.",
             self.ipset_box,
         ))
+        card.add(Divider())
 
-        self.body.addWidget(card)
+        restart_row = QHBoxLayout()
+        restart_row.setSpacing(10)
+        self.filters_hint = faint_label("", wrap=False)
+        restart_row.addWidget(self.filters_hint)
+        restart_row.addStretch(1)
+        self.btn_restart = Button("Перезапустить обход", variant="ghost")
+        self.btn_restart.clicked.connect(self._restart_bypass)
+        restart_row.addWidget(self.btn_restart)
+        card.add_layout(restart_row)
+
+        self.more.body.addWidget(card)
+        self.body.addWidget(self.more)
         self._sync_filters()
 
     def _sync_filters(self) -> None:
@@ -265,8 +354,8 @@ class HomePage(Page):
 
         size = lists_module.ipset_size()
         self.filters_hint.setText(
-            f"{size} подсетей в списке · применяются после перезапуска обхода"
-            if size else "применяются после перезапуска обхода"
+            (f"{size} подсетей в списке · " if size else "")
+            + "фильтры применяются после перезапуска обхода"
         )
 
     def _change_game_filter(self) -> None:
@@ -303,49 +392,6 @@ class HomePage(Page):
         else:
             self.context.ok(f"Фильтр IP: {lists_module.IPSET_MODES[mode]}")
 
-    def _build_stats(self) -> None:
-        card = Card(padding=18, spacing=14)
-
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(26)
-        grid.setVerticalSpacing(10)
-        self.stat_zapret = StatItem("Обход", "выключен")
-        self.stat_dns = StatItem("Smart DNS", "выключен")
-        self.stat_filter = StatItem("Игровой фильтр", "—")
-        self.stat_uptime = StatItem("Время работы", "—")
-        for column, item in enumerate((
-            self.stat_zapret, self.stat_dns, self.stat_filter, self.stat_uptime
-        )):
-            grid.addWidget(item, 0, column)
-        grid.setColumnStretch(4, 1)
-        card.add_layout(grid)
-
-        card.add(Divider())
-
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
-        self.check_spinner = Spinner(16, self.context.color("accent"))
-        actions.addWidget(self.check_spinner)
-        self.btn_check = Button("Проверить доступность", variant="primary")
-        self.btn_check.clicked.connect(self._run_check)
-        actions.addWidget(self.btn_check)
-        self.btn_diag = Button("Диагностика")
-        self.btn_diag.clicked.connect(
-            lambda: self.context.navigate.emit("diagnostics")
-        )
-        actions.addWidget(self.btn_diag)
-        self.btn_restart = Button("Перезапустить обход", variant="ghost")
-        self.btn_restart.clicked.connect(self._restart_bypass)
-        actions.addWidget(self.btn_restart)
-        actions.addStretch(1)
-        card.add_layout(actions)
-
-        self.check_results = QVBoxLayout()
-        self.check_results.setSpacing(6)
-        card.add_layout(self.check_results)
-
-        self.body.addWidget(card)
-
     def _restart_bypass(self) -> None:
         if not self.context.status.running:
             self.context.warn("Обход не запущен — нечего перезапускать.")
@@ -353,36 +399,76 @@ class HomePage(Page):
         self.stop_bypass()
         QTimer.singleShot(1400, self.start_bypass)
 
-    # --- состояние -------------------------------------------------------
+    # --- состояние ---------------------------------------------------------
 
     def on_activate(self) -> None:
-        self._sync_dns()
         self._sync_filters()
         self.context.refresh_status(force=True)
         self.context.refresh_tunnels(force=True)
+        self.context.refresh_tgws(force=True)
+        self.context.refresh_vpn_status(force=True)
 
     def _lane_clicked(self, key: str) -> None:
-        if key == "zapret":
-            self.context.navigate.emit("strategies")
-        elif key == "dns":
-            self.context.navigate.emit("dns")
-        elif key == "vpn":
-            self.context.navigate.emit("diagnostics")
+        targets = {"zapret": "strategies", "dns": "dns", "tg": "telegram",
+                   "vpn": "vpn", "foreign": "diagnostics"}
+        page = targets.get(key)
+        if page:
+            self.context.navigate.emit(page)
 
-    def _refresh(self) -> None:
+    def _dns_state(self) -> tuple[bool, str]:
         from app.core import dnsctl
 
+        preset = dnsctl.current_preset()
+        title = next((item.title for item in dnsctl.PRESETS if item.key == preset), "")
+        return preset != "auto", title
+
+    def _refresh(self) -> None:
         status = self.context.status
         tunnels = self.context.tunnels
-        dns_preset = dnsctl.current_preset()
-        dns_on = dns_preset != "auto"
-        dns_title = next(
-            (item.title for item in dnsctl.PRESETS if item.key == dns_preset), ""
-        )
+        tg = self.context.tgws_status
+        vpn = self.context.vpn_status
+        dns_on, dns_title = self._dns_state()
 
-        self.switch_zapret.blockSignals(True)
-        self.switch_zapret.setChecked(status.running, animate=False)
-        self.switch_zapret.blockSignals(False)
+        self.card_zapret.set_checked(status.running)
+        self.card_vpn.set_checked(vpn.running)
+        self.card_tg.set_checked(tg.running)
+        self.card_dns.set_checked(dns_on)
+
+        servers = self.context.servers()
+        transport_label = ("туннель" if vpn_actions.transport() == vpn_config.TRANSPORT_TUN
+                           else "прокси")
+        if vpn.running:
+            self.card_vpn.state.setText(
+                f"работает · {transport_label} · {vpn.server or 'сервер'}"
+            )
+        elif servers:
+            self.card_vpn.state.setText(
+                f"выключен · {transport_label} · {self.context.selected_server()}"
+            )
+        else:
+            self.card_vpn.state.setText("выключен · подписка не добавлена")
+        self.card_vpn.action.setText("Серверы" if servers else "Добавить подписку")
+
+        strategy = self.context.current_strategy()
+        self.card_zapret.state.setText(
+            f"работает · {strategy.title if strategy else 'стратегия'}"
+            if status.running else
+            f"выключен · стратегия: {strategy.title if strategy else '—'}"
+        )
+        self.card_zapret.action.setText(
+            "Сменить стратегию" if status.running else "Выбрать стратегию"
+        )
+        self.card_tg.state.setText(
+            f"работает · порт {tg.port}" + (f" · соединений {tg.active}" if tg.active else "")
+            if tg.running else "выключен · Telegram подключается напрямую"
+        )
+        self.card_tg.action.setEnabled(tg.running)
+        self.card_dns.state.setText(
+            f"работает · {dns_title}" if dns_on else "выключен · адреса от провайдера"
+        )
+        self.card_dns.action.setText(
+            "Другой сервис" if dns_on else "Выбрать сервис"
+        )
 
         self.rails.update_state(
             zapret_on=status.running,
@@ -391,68 +477,83 @@ class HomePage(Page):
             dns_note=dns_title,
             tunnels=tunnels,
             direct_note="остальное",
+            tg_on=tg.running,
+            tg_note="WebSocket",
+            vpn_on=vpn.running,
+            vpn_chips=[vpn_config.MODE_LABELS.get(vpn.mode, "")
+                       if vpn.transport == vpn_config.TRANSPORT_TUN else "прокси"],
         )
 
-        if tunnels and status.running:
-            self.state_title.setText("Обход работает вместе с VPN")
-            self.state_detail.setText(
-                f"Поднят чужой туннель ({', '.join(tunnels)}). Через него "
-                "трафик и так идёт в обход, а обход DPI может ему мешать — "
-                "лучше выключить что-то одно."
-            )
-        elif tunnels:
-            self.state_title.setText(f"Работает VPN — {', '.join(tunnels)}")
-            self.state_detail.setText(
-                "Трафик уходит в чужой туннель. Программа в это не вмешивается "
-                "и ничего не выключает."
-            )
-        elif status.running and dns_on:
-            self.state_title.setText("Работают обход и Smart DNS")
-            self.state_detail.setText(
-                "Сайты из списка открываются в обход блокировки, а DNS "
-                "возвращает сервисы, закрытые по стране."
-            )
-        elif status.running:
-            self.state_title.setText("Работает обход")
-            self.state_detail.setText(
-                "Discord, YouTube и сайты из списка открываются в обход блокировки."
-            )
-        elif dns_on:
-            self.state_title.setText("Работает только Smart DNS")
-            self.state_detail.setText(
-                "Блокировку по стране обходим, но DPI провайдера — нет. "
-                "Включите обход, если сайты всё ещё не открываются."
-            )
-        else:
-            self.state_title.setText("Всё идёт напрямую")
-            self.state_detail.setText(
-                "Ничего не включено. Начните с обхода — он быстрее VPN и "
-                "не требует подписки."
-            )
+        active = []
+        if status.running:
+            active.append("обход")
+        if vpn.running:
+            active.append("VPN")
+        if tg.running:
+            active.append("Telegram")
+        if dns_on:
+            active.append("Smart DNS")
 
+        if tunnels and status.running:
+            title = "Обход работает вместе с VPN"
+            detail = (f"Поднят чужой туннель ({', '.join(tunnels)}). Через него трафик "
+                      "и так идёт мимо блокировок, а обход может ему мешать — "
+                      "лучше оставить что-то одно.")
+        elif tunnels:
+            title = f"Работает VPN — {', '.join(tunnels)}"
+            detail = ("Трафик уходит в чужой туннель. Программа в это не "
+                      "вмешивается и ничего не выключает.")
+        elif len(active) >= 2:
+            title = "Работают " + ", ".join(active)
+            detail = "Всё, что включено, действует одновременно и друг другу не мешает."
+        elif active:
+            title = {"обход": "Работает обход", "Telegram": "Работает прокси Telegram",
+                     "Smart DNS": "Работает только Smart DNS",
+                     "VPN": "Работает VPN"}[active[0]]
+            detail = {
+                "обход": "Discord, YouTube и сайты из списка открываются в обход блокировки.",
+                "VPN": ("Выбранные программы идут через туннель, остальные — напрямую."
+                        if vpn.transport == vpn_config.TRANSPORT_TUN else
+                        "Браузеры и всё, что уважает системный прокси, идут через VPN."),
+                "Telegram": "Telegram идёт через WebSocket. Сайты и Discord — напрямую: "
+                            "включите обход, если они не открываются.",
+                "Smart DNS": "Блокировку по стране обходим, но DPI провайдера — нет. "
+                             "Включите обход, если сайты не открываются.",
+            }[active[0]]
+        else:
+            title = "Всё идёт напрямую"
+            detail = "Ничего не включено. Начните с обхода — это один переключатель."
+
+        self._set_state(title, detail)
         self._sync_tunnel_banner(tunnels, status.running)
 
         self.stat_zapret.set_value(status.mode_label if status.running else "выключен")
+        self.stat_vpn.set_value(transport_label if vpn.running else "выключен")
+        self.stat_tg.set_value("работает" if tg.running else "выключен")
         self.stat_dns.set_value(dns_title if dns_on else "выключен")
-
-        from app.core import strategies as strategies_module
-
-        self.stat_filter.set_value(
-            GAME_FILTER_LABELS.get(strategies_module.read_game_filter(), "—")
-        )
-
-        strategy = self.context.current_strategy()
-        self.btn_strategy.setText(
-            f"✦  {strategy.title}" if strategy else "✦  стратегия не выбрана"
-        )
-        self.dns_state.setText("включён" if dns_on else "выключен")
         self._refresh_uptime()
 
+    def _set_state(self, title: str, detail: str) -> None:
+        """Смена заголовка с коротким проявлением, а не рывком."""
+        if self.state_title.text() == title:
+            self.state_detail.setText(detail)
+            return
+        self.state_title.setText(title)
+        self.state_detail.setText(detail)
+        effect = QGraphicsOpacityEffect(self.state_title)
+        self.state_title.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b"opacity", self.state_title)
+        animation.setDuration(260)
+        animation.setStartValue(0.15)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.finished.connect(lambda: self.state_title.setGraphicsEffect(None))
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
     def _sync_tunnel_banner(self, tunnels: list[str], zapret_on: bool) -> None:
-        if not tunnels:
+        if not tunnels or not config.get("warn_about_vpn", True):
             self.banner_tunnel.setVisible(False)
             return
-
         names = ", ".join(tunnels)
         if zapret_on:
             self.banner_tunnel.set_kind("warn")
@@ -476,9 +577,6 @@ class HomePage(Page):
             self._pending_updates.pop(kind, None)
         else:
             self._pending_updates[kind] = info
-        self._sync_update_banner()
-
-    def _sync_update_banner(self) -> None:
         core = self._pending_updates.get("core")
         app_info = self._pending_updates.get("app")
         if app_info is not None:
@@ -509,7 +607,7 @@ class HomePage(Page):
             f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
         )
 
-    # --- переключатель ---------------------------------------------------
+    # --- переключатели -----------------------------------------------------
 
     def toggle_bypass(self) -> None:
         """Тумблер из трея: включить, если выключено, и наоборот."""
@@ -528,7 +626,7 @@ class HomePage(Page):
             return
         self._busy_zapret = True
         self.spinner.start()
-        self.switch_zapret.setEnabled(False)
+        self.card_zapret.set_busy(True)
 
         if value:
             strategy = self.context.current_strategy()
@@ -552,11 +650,76 @@ class HomePage(Page):
     def _zapret_done(self, message: str, error: bool = False) -> None:
         self._busy_zapret = False
         self.spinner.stop()
-        self.switch_zapret.setEnabled(True)
+        self.card_zapret.set_busy(False)
         self.context.refresh_status(force=True)
         (self.context.error if error else self.context.ok)(message)
 
-    # --- проверка --------------------------------------------------------
+    def _toggle_tg(self, value: bool) -> None:
+        if self._busy_tg:
+            return
+        self._busy_tg = True
+        self.card_tg.set_busy(True)
+
+        def done(ok: bool) -> None:
+            self._busy_tg = False
+            self.card_tg.set_busy(False)
+            self._refresh()
+            if ok and value:
+                # Человеку нужен следующий шаг, а не просто «включено».
+                QTimer.singleShot(400, lambda: self.context.warn(
+                    "Теперь нажмите «Открыть в Telegram», чтобы он подключился через прокси."
+                ))
+
+        self._tg_worker = tgws_actions.toggle(self, self.context, value, done)
+
+    def _open_telegram(self) -> None:
+        tgws_actions.open_in_telegram(self.context)
+
+    def _toggle_vpn(self, value: bool) -> None:
+        if self._busy_vpn:
+            return
+        self._busy_vpn = True
+        self.card_vpn.set_busy(True)
+        self.spinner.start()
+
+        def done(_ok: bool) -> None:
+            self._busy_vpn = False
+            self.card_vpn.set_busy(False)
+            self.spinner.stop()
+            self._refresh()
+
+        if value:
+            self._vpn_worker = vpn_actions.start(
+                self, self.context, done,
+                on_progress=lambda text: self.state_detail.setText(text),
+            )
+            if self._vpn_worker is None:
+                done(False)
+        else:
+            self._vpn_worker = vpn_actions.stop(self, self.context, done)
+
+    def _toggle_dns(self, value: bool) -> None:
+        from app.core import dnsctl
+
+        if self._busy_dns:
+            return
+        self._busy_dns = True
+        self.card_dns.set_busy(True)
+        key = DNS_DEFAULT_PRESET if value else "auto"
+
+        worker = Worker(self)
+        worker.finished.connect(lambda message: self._dns_done(str(message)))
+        worker.failed.connect(lambda message: self._dns_done(str(message), error=True))
+        worker.run(dnsctl.apply_preset, key)
+        self._dns_worker = worker
+
+    def _dns_done(self, message: str, error: bool = False) -> None:
+        self._busy_dns = False
+        self.card_dns.set_busy(False)
+        self._refresh()
+        (self.context.error if error else self.context.ok)(message)
+
+    # --- проверка ----------------------------------------------------------
 
     def _run_check(self) -> None:
         if self._check_worker is not None and self._check_worker.busy():
@@ -579,14 +742,10 @@ class HomePage(Page):
     def _check_ready(self, results) -> None:
         self.btn_check.setEnabled(True)
         self.check_spinner.stop()
-        # Чистим здесь тоже: иначе повторный показ результатов наложился бы
-        # на предыдущий, если отрисовку вызвали в обход кнопки.
         clear_layout(self.check_results)
-        from app.ui.widgets import IconLabel
+        self._row_animations.clear()
 
-        for item in results:
-            # Каждая строка — отдельный виджет, а не вложенная компоновка:
-            # компоновки при очистке не удалялись и наезжали друг на друга.
+        for index, item in enumerate(results):
             row = QWidget(self)
             line = QHBoxLayout(row)
             line.setContentsMargins(0, 0, 0, 0)
@@ -602,6 +761,7 @@ class HomePage(Page):
                 f"{item.ms:.0f} мс" if item.ok else "нет ответа", wrap=False
             ))
             self.check_results.addWidget(row)
+            self._fade_row(row, delay=index * 45)
 
         failed = [item for item in results if not item.ok]
         if not failed:
@@ -609,16 +769,28 @@ class HomePage(Page):
         else:
             self.context.warn(f"Не открылось адресов: {len(failed)}")
 
-    # --- тема ------------------------------------------------------------
+    def _fade_row(self, row: QWidget, delay: int) -> None:
+        """Строки результата проявляются одна за другой."""
+        effect = QGraphicsOpacityEffect(row)
+        effect.setOpacity(0.0)
+        row.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b"opacity", row)
+        animation.setDuration(220)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.finished.connect(lambda: row.setGraphicsEffect(None))
+        self._row_animations.append(animation)
+        QTimer.singleShot(delay, animation.start)
+
+    # --- тема --------------------------------------------------------------
 
     def apply_theme(self) -> None:
         accent = self.context.color("accent")
         self.spinner.set_color(accent)
         self.check_spinner.set_color(accent)
-        self.switch_zapret.set_colors(
-            self.context.color("lane_zapret"),
-            self.context.color("border_strong"),
-            self.context.color("surface"),
-        )
+        for card in (self.card_zapret, self.card_vpn, self.card_tg, self.card_dns):
+            card.apply_theme()
+        self.more.apply_theme()
         self.rails.apply_theme()
         self._refresh()

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.core import autotest, strategies as strategies_module, telegram
+from app.core import autotest, strategies as strategies_module
 from app.core.config import config
 from app.core.engine import MODE_PROCESS, MODE_SERVICE, engine
 from app.core.strategies import GAME_FILTER_LABELS, Strategy
@@ -31,7 +31,6 @@ from app.ui.widgets import (
     Divider,
     IconLabel,
         Spinner,
-    Switch,
     Worker,
     faint_label,
     section_label,
@@ -172,7 +171,6 @@ class StrategiesPage(Page):
         self._auto_worker: Worker | None = None
 
         self._build_autopick()
-        self._build_telegram()
         self._build_game_filter()
         self._build_list()
 
@@ -371,106 +369,6 @@ class StrategiesPage(Page):
             layout.addWidget(apply_button)
         return line
 
-    # --- Telegram --------------------------------------------------------
-
-    def _build_telegram(self) -> None:
-        card = Card(padding=20, spacing=12)
-
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        self.tg_icon = IconLabel("bolt", self.context.color("accent"), 20)
-        header.addWidget(self.tg_icon)
-        header.addWidget(section_label("Обход Telegram"))
-        header.addStretch(1)
-        self.tg_badge = Badge("выключен", "neutral")
-        header.addWidget(self.tg_badge)
-        self.switch_tg = Switch(telegram.is_enabled())
-        self.switch_tg.toggled.connect(self._toggle_telegram)
-        header.addWidget(self.switch_tg)
-        card.add_layout(header)
-
-        card.add(faint_label(
-            "Telegram общается по протоколу MTProto, где имени домена в пакете "
-            "нет вообще — опознать его по списку сайтов невозможно. Поэтому "
-            "обход работает по официальному списку подсетей Telegram. "
-            "Секции добавляются к выбранной стратегии: отдельным процессом "
-            "запустить нельзя, два winws не уживаются из-за общего драйвера."
-        ))
-
-        controls = QHBoxLayout()
-        controls.setSpacing(10)
-        self.tg_mode = QComboBox()
-        for key, label in telegram.MODES.items():
-            self.tg_mode.addItem(label, key)
-        index = self.tg_mode.findData(telegram.mode())
-        if index >= 0:
-            self.tg_mode.setCurrentIndex(index)
-        self.tg_mode.currentIndexChanged.connect(self._change_telegram_mode)
-        controls.addWidget(self.tg_mode)
-
-        self.tg_spinner = Spinner(16, self.context.color("accent"))
-        controls.addWidget(self.tg_spinner)
-
-        self.btn_tg_update = Button("Обновить подсети", variant="ghost")
-        self.btn_tg_update.clicked.connect(self._update_telegram_ipset)
-        controls.addWidget(self.btn_tg_update)
-        controls.addStretch(1)
-        card.add_layout(controls)
-
-        self.tg_hint = faint_label("")
-        card.add(self.tg_hint)
-
-        self.body.addWidget(card)
-        self._sync_telegram()
-
-    def _sync_telegram(self) -> None:
-        enabled = telegram.is_enabled()
-        self.tg_badge.update_state(
-            "включён" if enabled else "выключен", "ok" if enabled else "neutral"
-        )
-        self.tg_hint.setText(telegram.summary())
-        self.switch_tg.set_colors(
-            self.context.color("accent"),
-            self.context.color("border_strong"),
-            self.context.color("surface"),
-        )
-
-    def _toggle_telegram(self, value: bool) -> None:
-        telegram.set_enabled(value)
-        self._sync_telegram()
-        if self.context.status.running:
-            self.context.warn(
-                "Перезапустите обход, чтобы настройка Telegram вступила в силу."
-            )
-        else:
-            self.context.ok("Обход Telegram " + ("включён" if value else "выключен"))
-
-    def _change_telegram_mode(self) -> None:
-        telegram.set_mode(str(self.tg_mode.currentData()))
-        self._sync_telegram()
-        if self.context.status.running and telegram.is_enabled():
-            self.context.warn("Перезапустите обход, чтобы применить новый режим.")
-
-    def _update_telegram_ipset(self) -> None:
-        self.btn_tg_update.setEnabled(False)
-        self.tg_spinner.start()
-        worker = Worker(self)
-        worker.finished.connect(self._telegram_updated)
-        worker.failed.connect(self._telegram_failed)
-        worker.run(telegram.update_ipset)
-        self._tg_worker = worker
-
-    def _telegram_updated(self, count) -> None:
-        self.btn_tg_update.setEnabled(True)
-        self.tg_spinner.stop()
-        self._sync_telegram()
-        self.context.ok(f"Подсети Telegram обновлены: {count}")
-
-    def _telegram_failed(self, message: str) -> None:
-        self.btn_tg_update.setEnabled(True)
-        self.tg_spinner.stop()
-        self.context.error(str(message))
-
     # --- игровой фильтр --------------------------------------------------
 
     def _build_game_filter(self) -> None:
@@ -607,9 +505,6 @@ class StrategiesPage(Page):
 
     def apply_theme(self) -> None:
         self.auto_icon.set_color(self.context.color("accent"))
-        self.tg_icon.set_color(self.context.color("accent"))
-        self.tg_spinner.set_color(self.context.color("accent"))
-        self._sync_telegram()
         self.auto_spinner.set_color(self.context.color("accent"))
         for row in self._rows:
             row.apply_theme()

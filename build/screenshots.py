@@ -33,9 +33,9 @@ def main() -> int:
     application.processEvents()
 
     combos = [
-        ("rails", "cyan"),
-        ("light", "ruby"),
-        ("midnight", "sapphire"),
+        ("rails", "sapphire"),
+        ("light", "sapphire"),
+        ("midnight", "cyan"),
     ]
     pages = [key for key, _title, _icon in PAGES]
 
@@ -43,7 +43,7 @@ def main() -> int:
         # Кадры для README: без плашек о правах и чужом VPN — они про
         # конкретную машину, а не про программу. Диагностику и проверку
         # обновлений запускаем, чтобы страницы не были пустыми.
-        combos = [("light", "ruby"), ("rails", "ruby")]
+        combos = [("light", "sapphire"), ("rails", "sapphire")]
         home = window.ensure_page("home")
         for name in ("banner_admin", "banner_tunnel"):
             banner = getattr(home, name, None)

@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QWidget
 
 from app.core import paths
-from app.core.constants import APP_NAME, APP_VERSION
+from app.core.constants import APP_AUTHOR, APP_NAME, APP_VERSION
 from app.ui import icons
 
 WIDTH = 380
@@ -108,7 +108,8 @@ class Splash(QWidget):
         painter.setFont(version_font)
         painter.setPen(faint)
         painter.drawText(QRectF(102, 64, WIDTH - 130, 20),
-                         Qt.AlignmentFlag.AlignVCenter, f"версия {APP_VERSION}")
+                         Qt.AlignmentFlag.AlignVCenter,
+                         f"версия {APP_VERSION}  ·  автор {APP_AUTHOR}")
 
         painter.setFont(QFont("Segoe UI", 9))
         painter.setPen(faint)
