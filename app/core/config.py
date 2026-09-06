@@ -14,6 +14,7 @@ DEFAULTS: dict[str, Any] = {
     # Внешний вид
     "theme": "rails",             # см. ui/theme.py
     "accent": "ruby",
+    "last_dark_theme": "rails",   # куда возвращает кнопка «тёмная» в заголовке
     # Поведение
     "run_mode": "service",        # service | process
     "last_strategy": "general",
@@ -25,7 +26,7 @@ DEFAULTS: dict[str, Any] = {
     # Обновления
     "check_core_updates": True,
     "check_app_updates": True,
-    "auto_install_core_updates": False,
+    "auto_install_core_updates": True,   # ядро ставится само, обход коротко перезапускается
     "update_check_interval_hours": 12,
     "last_update_check": 0,
     "skipped_core_version": "",
@@ -38,27 +39,9 @@ DEFAULTS: dict[str, Any] = {
     # Telegram
     "telegram_bypass": False,
     "telegram_mode": "split",
-    # VPN
-    "vpn_subscription_url": "",
-    "vpn_selected_server": "",
-    "vpn_mode": "selected",       # selected | except | all
-    "vpn_apps": [],               # программы, которым нужен туннель
-    "vpn_direct_apps": [],        # программы в обход туннеля
-    "vpn_stack": "mixed",         # стек TUN: mixed | system | gvisor
-    "vpn_strict_route": False,    # жёсткий перехват маршрута
-    "vpn_ipv6": False,            # пускать IPv6 в туннель
-    "vpn_mtu": 9000,
-    # DNS по умолчанию идёт напрямую. Через туннель он ломает вообще всё,
-    # включая программы вне туннеля: одна заминка прокси — и имена не
-    # разрешаются ни у кого.
-    "vpn_dns_through_tunnel": False,
-    "vpn_dns_server": "1.1.1.1",
-    "vpn_bypass_lan": True,       # локальная сеть всегда напрямую
-    "vpn_autostart": False,
-    "vpn_auto_exclude": True,     # адреса серверов — в исключения zapret
-    "vpn_managed_excludes": [],
-    "vpn_last_update": 0,
-    "vpn_dns_migrated": False,    # разовый перевод DNS на прямой путь
+    # Сосуществование со сторонним VPN (Happ, Hiddify, WireGuard и др.)
+    "pause_zapret_with_vpn": True,   # снимать обход, пока поднят чужой туннель
+    "zapret_paused_by_vpn": False,   # обход снят нами — вернуть после VPN
     # Прочее
     "first_run": True,
     "window_geometry": "",
@@ -117,12 +100,36 @@ class Config:
                 if key in DEFAULTS:
                     self._data[key] = value
 
-        # Разовая правка уже сохранённых настроек: DNS через туннель рвал
-        # связь у всех программ сразу, включая те, что идут напрямую.
-        if not self._data.get("vpn_dns_migrated"):
-            self._data["vpn_dns_through_tunnel"] = False
-            self._data["vpn_dns_migrated"] = True
-            self.save()
+    def raw(self) -> dict[str, Any]:
+        """Файл настроек как есть, вместе с ключами прошлых версий.
+
+        ``load`` оставляет только известные ключи, поэтому списки от старых
+        версий (например, выключенные ими сетевые адаптеры) сюда не попадают.
+        Чтобы их починить, файл приходится читать напрямую.
+        """
+        path = paths.config_path()
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def drop_raw_key(self, key: str) -> None:
+        """Убрать из файла ключ, оставшийся от прошлой версии."""
+        raw = self.raw()
+        if key not in raw:
+            return
+        path = paths.config_path()
+        del raw[key]
+        try:
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            pass
 
     def save(self) -> None:
         path = paths.config_path()

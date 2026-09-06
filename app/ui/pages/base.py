@@ -108,9 +108,12 @@ class Banner(QFrame):
         self.label.setWordWrap(True)
         layout.addWidget(self.label, 1)
 
-        self.action = Button(action_text, variant="soft")
-        self.action.setVisible(bool(action_text))
+        # Сначала родитель и компоновка, только потом видимость: setVisible
+        # на виджете без родителя Qt понимает как «показать отдельным окном»,
+        # и на экране мигает пустая кнопка.
+        self.action = Button(action_text, variant="soft", parent=self)
         layout.addWidget(self.action, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.action.setVisible(bool(action_text))
 
         context.theme_changed.connect(self.apply_theme)
         self.apply_theme()

@@ -83,12 +83,12 @@ def build() -> Image.Image:
     draw.text((left, 122), "Zapret Control+", font=title_font, fill=(255, 255, 255))
     draw.text(
         (left, 232),
-        "Обход блокировок, VPN и Smart DNS в одном окне",
+        "Обход блокировок Discord, YouTube и Telegram — в одном окне",
         font=sub_font, fill=(240, 212, 220),
     )
     draw.text(
         (left, 286),
-        "zapret · VPN по приложениям · Telegram · xbox-dns",
+        "zapret · Smart DNS для Xbox · Telegram · автообновление",
         font=small_font, fill=(206, 158, 174),
     )
     return canvas.convert("RGB")

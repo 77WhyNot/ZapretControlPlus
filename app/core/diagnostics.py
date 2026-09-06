@@ -143,14 +143,30 @@ def check_proxy() -> CheckResult:
 
 
 def check_vpn() -> CheckResult:
-    adapters = winapi.active_vpn_adapters()
-    if not adapters:
-        return CheckResult("vpn", "VPN-подключения", OK, "Активных VPN-туннелей не найдено.")
-    names = ", ".join(sorted({adapter.name for adapter in adapters}))
+    """Сторонний туннель — не поломка, а соседство, о котором надо знать."""
+    from app.core import netadapters
+
+    names = netadapters.tunnel_names()
+    disabled = netadapters.disabled_tunnels()
+    tail = ""
+    if disabled:
+        tail = (f" Есть и выключенные туннельные адаптеры: {', '.join(disabled)} — "
+                "если какой-то VPN-клиент не поднимается, кнопка «Починить сетевые "
+                "адаптеры» ниже включит их обратно.")
+
+    if names:
+        return CheckResult(
+            "vpn", "Сторонний VPN", WARN,
+            f"Работает: {', '.join(names)}. Программа туда не вмешивается. "
+            "Но через туннель трафик и так идёт мимо блокировок, а обход правит "
+            "пакеты уже на входе в него — держать включённым лучше что-то одно."
+            + tail,
+        )
+    if disabled:
+        return CheckResult("vpn", "Сторонний VPN", WARN, tail.strip())
     return CheckResult(
-        "vpn", "VPN-подключения", WARN,
-        f"Активны: {names}. Через VPN трафик и так идёт в обход, а zapret может "
-        "конфликтовать с туннелем. Для проверки стратегий VPN лучше отключить.",
+        "vpn", "Сторонний VPN", OK,
+        "Чужих туннелей не поднято, обход работает в обычных условиях.",
     )
 
 

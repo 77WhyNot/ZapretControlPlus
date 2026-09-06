@@ -7,9 +7,6 @@ from PySide6.QtCore import QObject, Signal
 from app.core import strategies
 from app.core.config import config
 from app.core.engine import Status, engine
-from app.core.vpn import subscription
-from app.core.vpn.engine import VpnStatus, vpn_engine
-from app.core.vpn.links import Server
 from app.ui import theme
 
 
@@ -18,9 +15,10 @@ class AppContext(QObject):
 
     theme_changed = Signal()
     status_changed = Signal(object)
-    vpn_status_changed = Signal(object)
     strategies_changed = Signal()
-    servers_changed = Signal()
+    tunnels_changed = Signal(object)   # список чужих VPN-туннелей
+    update_available = Signal(str, object)  # 'core' | 'app', UpdateInfo или None
+    install_update = Signal(str)       # просьба поставить: 'core' | 'app'
     notify = Signal(str, str)          # текст, вид (ok/warn/error)
     navigate = Signal(str)             # ключ страницы
 
@@ -30,8 +28,7 @@ class AppContext(QObject):
             str(config.get("theme")), str(config.get("accent"))
         )
         self._status = engine.status()
-        self._vpn_status = vpn_engine.status()
-        self._servers: list[Server] = []
+        self._tunnels: list[str] = []
 
     # --- тема ------------------------------------------------------------
 
@@ -68,35 +65,21 @@ class AppContext(QObject):
             self.status_changed.emit(status)
         return status
 
-    # --- VPN -------------------------------------------------------------
+    # --- чужие туннели ---------------------------------------------------
 
     @property
-    def vpn_status(self) -> VpnStatus:
-        return self._vpn_status
+    def tunnels(self) -> list[str]:
+        """Названия живых VPN-туннелей: Happ, WireGuard и прочие."""
+        return list(self._tunnels)
 
-    def refresh_vpn_status(self, force: bool = False) -> VpnStatus:
-        status = vpn_engine.status()
-        if force or status != self._vpn_status:
-            self._vpn_status = status
-            self.vpn_status_changed.emit(status)
-        return status
+    def refresh_tunnels(self, force: bool = False) -> list[str]:
+        from app.core import netadapters
 
-    def servers(self) -> list[Server]:
-        """Серверы подписки: держим в контексте, чтобы не читать кэш на каждой странице."""
-        if not self._servers:
-            self._servers, _ = subscription.load_cached()
-        return list(self._servers)
-
-    def set_servers(self, servers: list[Server]) -> None:
-        self._servers = list(servers)
-        self.servers_changed.emit()
-
-    def selected_server(self) -> str:
-        chosen = str(config.get("vpn_selected_server", ""))
-        names = [server.name for server in self.servers()]
-        if chosen in names:
-            return chosen
-        return names[0] if names else ""
+        found = netadapters.tunnel_names()
+        if force or found != self._tunnels:
+            self._tunnels = found
+            self.tunnels_changed.emit(list(found))
+        return list(found)
 
     # --- стратегии -------------------------------------------------------
 

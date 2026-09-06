@@ -7,7 +7,6 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QMessageBox,
     QLabel,
     QPlainTextEdit,
     QVBoxLayout,
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import (
 
 from app.core import diagnostics as diag
 from app.core import logs, paths
-from app.core.vpn import clients as vpn_clients
 from app.ui.context import AppContext
 from app.ui.pages.base import Page, StatusIcon
 from app.ui.widgets import (
@@ -30,11 +28,6 @@ from app.ui.widgets import (
     faint_label,
     section_label,
 )
-
-
-# Перенос строки для диалогов: держим константой, чтобы не зависеть
-# от того, как разные инструменты обрабатывают экранирование.
-LINE_BREAK = chr(10)
 
 
 class CheckRow(QWidget):
@@ -302,17 +295,8 @@ class DiagnosticsPage(Page):
 
         clients_row = QHBoxLayout()
         clients_row.setSpacing(10)
-        self.btn_stop_clients = Button("Закрыть чужие VPN-клиенты", variant="soft")
-        self.btn_stop_clients.clicked.connect(self._stop_clients)
-        clients_row.addWidget(self.btn_stop_clients)
-
-        self.btn_free_adapter = Button("Освободить адаптер", variant="ghost")
-        self.btn_free_adapter.clicked.connect(
-            lambda: self._run_tool(self._free_adapter, self.btn_free_adapter)
-        )
-        clients_row.addWidget(self.btn_free_adapter)
-
-        self.btn_restore_adapters = Button("Вернуть адаптеры", variant="ghost")
+        self.btn_restore_adapters = Button("Починить сетевые адаптеры",
+                                           variant="soft")
         self.btn_restore_adapters.clicked.connect(
             lambda: self._run_tool(self._restore_adapters, self.btn_restore_adapters)
         )
@@ -329,20 +313,15 @@ class DiagnosticsPage(Page):
         self.body.addWidget(card)
         self._refresh_clients()
 
-    def _free_adapter(self) -> str:
-        """Отключить чужой туннель, который мешает поднять наш."""
-        from app.core.vpn.engine import free_busy_adapters
-
-        return free_busy_adapters()
-
     def _restore_adapters(self) -> str:
-        """Вернуть всё, что программа когда-либо отключала."""
-        from app.core.vpn.engine import restore_paused_adapters
+        """Включить обратно выключённые туннельные адаптеры.
 
-        restored = restore_paused_adapters()
-        if not restored:
-            return "Отключённых нами адаптеров нет — возвращать нечего."
-        return "Возвращены адаптеры: " + ", ".join(restored)
+        Пригодится тем, кто ставил версии 2.x: они умели временно отключать
+        адаптер чужого VPN-клиента и при падении не включали его обратно.
+        """
+        from app.core import netadapters
+
+        return netadapters.enable_all_tunnels()
 
     def _flush_dns(self) -> str:
         from app.core import dnsctl
@@ -351,38 +330,37 @@ class DiagnosticsPage(Page):
                 else "Не удалось очистить кэш DNS.")
 
     def _refresh_clients(self) -> None:
-        found = vpn_clients.running_clients()
-        if found:
-            names = ", ".join(item.title for item in found)
-            self.clients_label.setText(
-                f"Сейчас запущены сторонние VPN-клиенты: {names}. "
-                "Два туннеля одновременно конфликтуют — закройте их, "
-                "прежде чем включать VPN здесь."
-            )
-            self.btn_stop_clients.setEnabled(True)
-        else:
-            self.clients_label.setText("Сторонних VPN-клиентов не запущено.")
-            self.btn_stop_clients.setEnabled(False)
+        """Показать, что происходит с чужими туннелями. Ничего не трогаем.
 
-    def _stop_clients(self) -> None:
-        found = vpn_clients.running_clients()
-        if not found:
-            self._refresh_clients()
-            return
-        names = ", ".join(item.title for item in found)
-        answer = QMessageBox.question(
-            self, "Закрыть чужие клиенты",
-            f"Будут принудительно закрыты: {names}."
-            + LINE_BREAK * 2 +
-            
-            "Их туннели отключатся, несохранённые данные в этих программах "
-            "могут потеряться. Продолжить?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        self._run_tool(lambda: vpn_clients.stop_all(found), self.btn_stop_clients)
+        Список выключенных адаптеров спрашивается у PowerShell и занимает
+        около секунды — в потоке интерфейса это заметная заминка, поэтому
+        считаем в фоне, а надпись обновляем по готовности.
+        """
+        from app.core import netadapters
+
+        self.clients_label.setText("Смотрим сетевые адаптеры…")
+
+        def job():
+            return netadapters.tunnel_names(), netadapters.disabled_tunnels()
+
+        worker = Worker(self)
+        worker.finished.connect(lambda payload: self._show_clients(*payload))
+        worker.failed.connect(lambda message: self.clients_label.setText(message))
+        worker.run(job)
+        self._clients_worker = worker
+
+    def _show_clients(self, live: list[str], broken: list[str]) -> None:
+        if live:
+            text = (f"Работает сторонний VPN: {', '.join(live)}. "
+                    "Программа его не трогает — ни адаптер, ни процесс. "
+                    "Обход DPI при живом туннеле лучше выключить.")
+        else:
+            text = "Сторонних VPN-туннелей сейчас не поднято."
+        if broken:
+            text += (f" Есть выключенные туннельные адаптеры: {', '.join(broken)}. "
+                     "Если ваш VPN-клиент не поднимается, кнопка ниже включит "
+                     "их обратно.")
+        self.clients_label.setText(text)
 
     def _run_tool(self, function, button) -> None:
         button.setEnabled(False)

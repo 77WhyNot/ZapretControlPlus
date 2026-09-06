@@ -138,6 +138,7 @@ class SettingsPage(Page):
         self._switches: list[Switch] = []
         self._build_appearance()
         self._build_behaviour()
+        context.theme_changed.connect(self._theme_changed_outside)
         self._build_network()
         self._build_danger()
         self.apply_theme()
@@ -269,8 +270,17 @@ class SettingsPage(Page):
         card.add(Divider())
 
         self._add_switch(
+            card, "pause_zapret_with_vpn", "Уступать дорогу стороннему VPN",
+            "Пока поднят чужой туннель (Happ, Hiddify, WireGuard), обход "
+            "снимается сам, а после выключения VPN возвращается. Через "
+            "туннель трафик и так идёт мимо блокировок, а обход правит "
+            "пакеты уже на входе в него — из-за этого VPN может рваться.",
+        )
+        card.add(Divider())
+
+        self._add_switch(
             card, "warn_about_vpn", "Предупреждать о включённом VPN",
-            "Через VPN обход обычно не нужен и может мешать.",
+            "Показывать плашку, когда обнаружен сторонний туннель.",
         )
         card.add(Divider())
 
@@ -437,6 +447,11 @@ class SettingsPage(Page):
 
     def on_activate(self) -> None:
         self._sync_appearance()
+
+    def _theme_changed_outside(self) -> None:
+        """Тему сменили кнопкой в заголовке — карточки должны это показать."""
+        if hasattr(self, "theme_cards"):
+            self._sync_appearance()
         self.proxy_input.setText(str(config.get("custom_proxy", "")))
         self.net_status.setText(f"Текущий режим: {net.connectivity_hint()}.")
 

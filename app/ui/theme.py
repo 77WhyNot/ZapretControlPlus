@@ -231,11 +231,16 @@ def build_tokens(theme_key: str, accent_key: str) -> dict[str, str]:
     # один и тот же цвет означает один и тот же путь трафика во всей программе.
     tokens["lane_direct"] = "#7C8AA0" if theme.dark else "#68758A"
     tokens["lane_zapret"] = "#E63862" if theme.dark else "#C41E4A"
-    tokens["lane_vpn"] = "#22C6D8" if theme.dark else "#0E93A6"
+    tokens["lane_dns"] = "#22C6D8" if theme.dark else "#0E93A6"
+    # Чужой туннель — намеренно приглушённый: это не наш инструмент,
+    # мы им не управляем и только сообщаем, что он поднят.
+    tokens["lane_vpn"] = "#8B7BD8" if theme.dark else "#6A57C4"
     tokens["lane_direct_soft"] = mix(theme.colors["surface"], tokens["lane_direct"],
                                      0.18 if theme.dark else 0.12)
     tokens["lane_zapret_soft"] = mix(theme.colors["surface"], tokens["lane_zapret"],
                                      0.18 if theme.dark else 0.10)
+    tokens["lane_dns_soft"] = mix(theme.colors["surface"], tokens["lane_dns"],
+                                  0.18 if theme.dark else 0.10)
     tokens["lane_vpn_soft"] = mix(theme.colors["surface"], tokens["lane_vpn"],
                                   0.18 if theme.dark else 0.10)
     return tokens
@@ -356,6 +361,7 @@ QLabel[role="mono"], QPlainTextEdit[role="mono"] {{
 
 QLabel[lane="direct"] {{ color: {lane_direct}; }}
 QLabel[lane="zapret"] {{ color: {lane_zapret}; }}
+QLabel[lane="dns"] {{ color: {lane_dns}; }}
 QLabel[lane="vpn"] {{ color: {lane_vpn}; }}
 QLabel#PageSubtitle {{
     font-size: 13px;

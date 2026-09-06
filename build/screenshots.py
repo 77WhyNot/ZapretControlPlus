@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Настоящая платформа: в offscreen нет системных шрифтов, текст
+# рисуется квадратами. Окно при этом на экране не появляется.
+os.environ.setdefault("QT_QPA_PLATFORM", "windows")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app.core.config import config  # noqa: E402
 
-OUTPUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("build/preview")
+DOCS = "--docs" in sys.argv
+ARGS = [item for item in sys.argv[1:] if not item.startswith("--")]
+OUTPUT = Path(ARGS[0]) if ARGS else Path("build/preview")
 
 
 def main() -> int:
@@ -34,6 +39,26 @@ def main() -> int:
     ]
     pages = [key for key, _title, _icon in PAGES]
 
+    if DOCS:
+        # Кадры для README: без плашек о правах и чужом VPN — они про
+        # конкретную машину, а не про программу. Диагностику и проверку
+        # обновлений запускаем, чтобы страницы не были пустыми.
+        combos = [("light", "ruby"), ("rails", "ruby")]
+        home = window.ensure_page("home")
+        for name in ("banner_admin", "banner_tunnel"):
+            banner = getattr(home, name, None)
+            if banner is not None:
+                banner.hide()
+                banner.setVisible = lambda *_a, **_k: None  # noqa: E731
+        diagnostics = window.ensure_page("diagnostics")
+        diagnostics.run_checks()
+        updates = window.ensure_page("updates")
+        updates.check_core(manual=False)
+        updates.check_app(manual=False)
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            application.processEvents()
+
     for theme_key, accent_key in combos:
         config.set("theme", theme_key, save=False)
         config.set("accent", accent_key, save=False)
@@ -41,7 +66,9 @@ def main() -> int:
         application.processEvents()
         for page in pages:
             window.show_page(page)
-            for _ in range(3):
+            # Страница проявляется 140 мс — снимок раньше выйдет пустым.
+            deadline = time.monotonic() + 0.3
+            while time.monotonic() < deadline:
                 application.processEvents()
             path = OUTPUT / f"{theme_key}-{accent_key}-{page}.png"
             window.grab().save(str(path))

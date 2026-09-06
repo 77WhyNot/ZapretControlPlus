@@ -1,12 +1,11 @@
-"""Главная страница: схема маршрутов и два выключателя."""
+"""Обзор: выключатель обхода, Smart DNS, фильтры и проверка доступности."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
-    QMessageBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -16,12 +15,8 @@ from PySide6.QtWidgets import (
 
 from app.core import autotest, winapi
 from app.core.config import config
-from app.core.engine import MODE_PROCESS, MODE_SERVICE, engine
+from app.core.engine import engine
 from app.core.strategies import GAME_FILTER_LABELS
-from app.core.vpn import apps as apps_module
-from app.core.vpn import config as vpn_config
-from app.core.vpn import integration
-from app.core.vpn.engine import vpn_engine
 from app.ui.context import AppContext
 from app.ui.pages.base import Banner, Page
 from app.ui.rails import RailsBoard
@@ -44,26 +39,24 @@ class HomePage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "Маршруты",
-            "Три пути наружу. Напрямую идёт всё, что не отправлено в туннель, "
-            "и там его подхватывает zapret.",
+            "Обзор",
+            "Два способа вернуть доступ: zapret ломает распознавание домена "
+            "у провайдера, Smart DNS обходит блокировку по стране.",
             parent,
         )
         self._busy_zapret = False
-        self._busy_vpn = False
         self._check_worker = None
 
         self._build_banners()
         self._build_rails()
         self._build_controls()
-        self._build_tunnel()
-        self._build_dns()
         self._build_filters()
         self._build_stats()
 
         context.status_changed.connect(lambda _: self._refresh())
-        context.vpn_status_changed.connect(lambda _: self._refresh())
-        context.servers_changed.connect(self._reload_servers)
+        context.tunnels_changed.connect(lambda _: self._refresh())
+        context.strategies_changed.connect(self._refresh)
+        context.update_available.connect(self._update_available)
 
         self._tick = QTimer(self)
         self._tick.timeout.connect(self._refresh_uptime)
@@ -76,19 +69,31 @@ class HomePage(Page):
     def _build_banners(self) -> None:
         self.banner_admin = Banner(
             self.context, "warning",
-            "Программа запущена без прав администратора — ни zapret, ни VPN "
-            "не смогут работать. Перезапустите её от имени администратора.",
+            "Программа запущена без прав администратора — обход не сможет "
+            "работать. Перезапустите её от имени администратора.",
             kind="error",
         )
         self.body.addWidget(self.banner_admin)
         self.banner_admin.setVisible(not winapi.is_admin())
 
-        self.banner_foreign = Banner(
-            self.context, "globe",
-            "", kind="warn",
+        # Чужой туннель — не ошибка. Программа просто объясняет, что при
+        # включённом VPN обход не нужен, и предлагает снять его одной кнопкой.
+        self.banner_tunnel = Banner(
+            self.context, "globe", "", kind="warn", action_text="Выключить обход",
         )
-        self.body.addWidget(self.banner_foreign)
-        self.banner_foreign.setVisible(False)
+        self.banner_tunnel.action.clicked.connect(lambda: self.stop_bypass())
+        self.body.addWidget(self.banner_tunnel)
+        self.banner_tunnel.setVisible(False)
+
+        # Найденное обновление не должно лежать незамеченным на вкладке
+        # из меню «Ещё» — показываем прямо здесь, с кнопкой.
+        self._pending_updates: dict[str, object] = {}
+        self.banner_update = Banner(
+            self.context, "download", "", kind="info", action_text="Установить",
+        )
+        self.banner_update.action.clicked.connect(self._install_pending)
+        self.body.addWidget(self.banner_update)
+        self.banner_update.setVisible(False)
 
     def _build_rails(self) -> None:
         card = Card(padding=22, spacing=16)
@@ -115,7 +120,9 @@ class HomePage(Page):
         self.body.addWidget(card)
 
     def _build_controls(self) -> None:
-        """Два выключателя. Под каждым — что выбрано, и это же кнопка перехода."""
+        """Два инструмента рядом: обход и DNS. Оба включаются здесь."""
+        from app.core import dnsctl
+
         row = QHBoxLayout()
         row.setSpacing(16)
 
@@ -123,7 +130,7 @@ class HomePage(Page):
         zapret_card = Card(padding=20, spacing=12)
         head = QHBoxLayout()
         head.setSpacing(10)
-        head.addWidget(section_label("Zapret"))
+        head.addWidget(section_label("Обход DPI (zapret)"))
         head.addStretch(1)
         self.switch_zapret = Switch(False)
         self.switch_zapret.toggled.connect(self._toggle_zapret)
@@ -132,7 +139,7 @@ class HomePage(Page):
 
         zapret_card.add(faint_label(
             "Ломает распознавание домена у провайдера. Работает сразу для "
-            "всей системы, выбирать программы не нужно."
+            "всей системы, выбирать программы не нужно, скорость не падает."
         ))
 
         self.btn_strategy = Button("Основная")
@@ -142,238 +149,61 @@ class HomePage(Page):
         zapret_card.add(self.btn_strategy)
         row.addWidget(zapret_card, 1)
 
-        # --- vpn ---
-        vpn_card = Card(padding=20, spacing=12)
-        head_vpn = QHBoxLayout()
-        head_vpn.setSpacing(10)
-        head_vpn.addWidget(section_label("VPN"))
-        head_vpn.addStretch(1)
-        self.switch_vpn = Switch(False)
-        self.switch_vpn.toggled.connect(self._toggle_vpn)
-        head_vpn.addWidget(self.switch_vpn)
-        vpn_card.add_layout(head_vpn)
+        # --- smart dns ---
+        dns_card = Card(padding=20, spacing=12)
+        head_dns = QHBoxLayout()
+        head_dns.setSpacing(10)
+        head_dns.addWidget(section_label("Smart DNS"))
+        head_dns.addStretch(1)
+        self.dns_state = faint_label("", wrap=False)
+        head_dns.addWidget(self.dns_state)
+        dns_card.add_layout(head_dns)
 
-        vpn_card.add(faint_label(
-            "Уводит в туннель только выбранные программы. Остальные остаются "
-            "на zapret."
+        dns_card.add(faint_label(
+            "Возвращает доступ к Xbox Live, Game Pass и сервисам, которые "
+            "режут по стране. Работает вместе с обходом и не мешает VPN."
         ))
-
-        self.btn_server = Button("Подписка не настроена")
-        self.btn_server.clicked.connect(lambda: self.context.navigate.emit("servers"))
-        vpn_card.add(self.btn_server)
-        row.addWidget(vpn_card, 1)
-
-        self.body.addLayout(row)
-
-    def _build_tunnel(self) -> None:
-        """Состав туннеля виден сразу, менять — не уходя со страницы."""
-        card = Card(padding=16, spacing=10)
-
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        self.tunnel_caption = faint_label("В туннеле", wrap=False)
-        header.addWidget(self.tunnel_caption)
-        header.addStretch(1)
-        self.btn_edit_apps = Button("Изменить", variant="ghost")
-        self.btn_edit_apps.clicked.connect(
-            lambda: self.context.navigate.emit("vpnapps")
-        )
-        header.addWidget(self.btn_edit_apps)
-        card.add_layout(header)
-
-        self.tunnel_host = QWidget()
-        self.tunnel_row = QHBoxLayout(self.tunnel_host)
-        self.tunnel_row.setContentsMargins(0, 0, 0, 0)
-        self.tunnel_row.setSpacing(7)
-        card.add(self.tunnel_host)
-
-        self.body.addWidget(card)
-
-    def _refresh_tunnel(self) -> None:
-        from app.ui.appicons import app_pixmap
-        from app.ui.widgets import clear_layout
-
-        clear_layout(self.tunnel_row)
-        mode = str(config.get("vpn_mode", vpn_config.MODE_SELECTED))
-
-        if mode == vpn_config.MODE_ALL:
-            self.tunnel_caption.setText("В туннеле")
-            self.tunnel_row.addWidget(faint_label("весь трафик", wrap=False))
-            self.tunnel_row.addStretch(1)
-            return
-
-        key = "vpn_direct_apps" if mode == vpn_config.MODE_EXCEPT else "vpn_apps"
-        self.tunnel_caption.setText(
-            "Мимо туннеля" if mode == vpn_config.MODE_EXCEPT else "В туннеле"
-        )
-        names = list(config.get(key, []) or [])
-
-        if not names:
-            self.tunnel_row.addWidget(faint_label(
-                "программы не выбраны — нажмите «Изменить»", wrap=False
-            ))
-            self.tunnel_row.addStretch(1)
-            return
-
-        ratio = self.devicePixelRatioF() or 1.0
-        for name in names[:6]:
-            chip = QWidget(self.tunnel_host)
-            line = QHBoxLayout(chip)
-            line.setContentsMargins(7, 4, 10, 4)
-            line.setSpacing(7)
-
-            icon = QLabel(chip)
-            icon.setFixedSize(18, 18)
-            icon.setPixmap(app_pixmap(
-                apps_module.resolve_executable(name),
-                apps_module._pretty_name(name), 18, ratio,
-            ))
-            line.addWidget(icon)
-            title = QLabel(apps_module._pretty_name(name), chip)
-            title.setStyleSheet("font-size: 12px;")
-            line.addWidget(title)
-
-            chip.setStyleSheet(
-                f"background: {self.context.color('surface_alt')};"
-                f"border: 1px solid {self.context.color('border')};"
-                "border-radius: 8px;"
-            )
-            self.tunnel_row.addWidget(chip)
-
-        if len(names) > 6:
-            self.tunnel_row.addWidget(faint_label(f"и ещё {len(names) - 6}", wrap=False))
-        self.tunnel_row.addStretch(1)
-
-    def _resolve_foreign_clients(self) -> bool:
-        """Спросить и закрыть чужие VPN-клиенты. False — пользователь отказался."""
-        from app.core.vpn import clients as vpn_clients
-
-        found = vpn_clients.running_clients()
-        if not found:
-            return True
-
-        names = ", ".join(item.title for item in found)
-        answer = QMessageBox.question(
-            self, "Другой VPN уже работает",
-            f"Запущены: {names}." + LINE_BREAK * 2
-            + "Два туннеля одновременно не работают — они делят один сетевой "
-              "адаптер, и наш просто не поднимется." + LINE_BREAK * 2
-            + "Закрыть их и продолжить?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return False
-
-        message = vpn_clients.stop_all(found)
-        self.context.ok(message)
-        QTimer.singleShot(0, lambda: None)
-        import time as _time
-
-        _time.sleep(1.5)
-        return True
-
-    def _build_dns(self) -> None:
-        """Третий инструмент рядом с двумя другими, а не в глубине меню."""
-        from app.core import dnsctl
-        from app.ui.widgets import SettingRow
-
-        card = Card(padding=18, spacing=12)
-
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        header.addWidget(section_label("Smart DNS"))
-        header.addStretch(1)
-        self.dns_details = Button("Подробнее", variant="ghost")
-        self.dns_details.clicked.connect(lambda: self.context.navigate.emit("dns"))
-        header.addWidget(self.dns_details)
-        card.add_layout(header)
 
         self.dns_box = QComboBox()
         for preset in dnsctl.PRESETS:
             self.dns_box.addItem(preset.title, preset.key)
         self.dns_box.currentIndexChanged.connect(self._change_dns)
-        card.add(SettingRow(
-            "Сервис DNS",
-            "Третий способ разблокировки: возвращает доступ к Xbox Live, "
-            "Game Pass и сервисам, которые режут по стране. Работает вместе "
-            "с zapret и не мешает VPN.",
-            self.dns_box,
-        ))
+        dns_card.add(self.dns_box)
+        row.addWidget(dns_card, 1)
 
-        self.body.addWidget(card)
+        self.body.addLayout(row)
         self._sync_dns()
 
     def _sync_dns(self) -> None:
         from app.core import dnsctl
 
+        current = dnsctl.current_preset()
         self.dns_box.blockSignals(True)
-        index = self.dns_box.findData(dnsctl.current_preset())
+        index = self.dns_box.findData(current)
         if index >= 0:
             self.dns_box.setCurrentIndex(index)
         self.dns_box.blockSignals(False)
+        self.dns_state.setText(
+            "выключен" if current == "auto" else "включён"
+        )
 
     def _change_dns(self) -> None:
         from app.core import dnsctl
-        from app.ui.widgets import Worker
 
         key = str(self.dns_box.currentData())
         worker = Worker(self)
-        worker.finished.connect(lambda message: self.context.ok(str(message)))
+        worker.finished.connect(self._dns_done)
         worker.failed.connect(lambda message: self.context.error(str(message)))
         worker.run(dnsctl.apply_preset, key)
         self._dns_worker = worker
 
-    def _check_vpn_exit(self) -> None:
-        """Показать, каким адресом нас видит мир через туннель."""
-        from app.core.vpn.engine import vpn_engine
-        from app.ui.widgets import Worker
-
-        if not self.context.vpn_status.running:
-            self.context.warn("VPN выключен — проверять нечего.")
-            return
-
-        self.btn_vpn_check.setEnabled(False)
-        self.check_spinner.start()
-
-        def job():
-            return vpn_engine.exit_address(), vpn_engine.direct_address()
-
-        worker = Worker(self)
-        worker.finished.connect(self._show_exit)
-        worker.failed.connect(self._exit_failed)
-        worker.run(job)
-        self._exit_worker = worker
-
-    def _exit_failed(self, message: str) -> None:
-        self.btn_vpn_check.setEnabled(True)
-        self.check_spinner.stop()
-        self.context.error(message)
-
-    def _show_exit(self, payload) -> None:
-        through, direct = payload
-        self.btn_vpn_check.setEnabled(True)
-        self.check_spinner.stop()
-
-        same = through.get("ip") == direct.get("ip")
-        where = through.get("country", "?")
-        city = through.get("city") or ""
-        place = f"{where}, {city}" if city else where
-
-        if same:
-            self.context.error(
-                f"Туннель не работает: мир видит тот же адрес {through['ip']} "
-                f"({place}), что и без VPN. Смените сервер."
-            )
-        else:
-            self.context.ok(
-                f"VPN работает: снаружи вас видят как {through['ip']} — {place}. "
-                f"Без туннеля было бы {direct.get('ip', '?')} "
-                f"({direct.get('country', '?')})."
-            )
+    def _dns_done(self, message) -> None:
+        self.context.ok(str(message))
+        self._sync_dns()
+        self._refresh()
 
     def _build_filters(self) -> None:
-        """Игровой фильтр и IPSet — те же два переключателя, что в меню zapret."""
+        """Игровой фильтр и IPSet — те же два пункта, что в консольном меню."""
         from app.core import lists as lists_module
         from app.ui.widgets import SettingRow
 
@@ -479,12 +309,12 @@ class HomePage(Page):
         grid = QGridLayout()
         grid.setHorizontalSpacing(26)
         grid.setVerticalSpacing(10)
-        self.stat_zapret = StatItem("Zapret", "выключен")
-        self.stat_vpn = StatItem("VPN", "выключен")
-        self.stat_subscription = StatItem("Подписка", "—")
+        self.stat_zapret = StatItem("Обход", "выключен")
+        self.stat_dns = StatItem("Smart DNS", "выключен")
+        self.stat_filter = StatItem("Игровой фильтр", "—")
         self.stat_uptime = StatItem("Время работы", "—")
         for column, item in enumerate((
-            self.stat_zapret, self.stat_vpn, self.stat_subscription, self.stat_uptime
+            self.stat_zapret, self.stat_dns, self.stat_filter, self.stat_uptime
         )):
             grid.addWidget(item, 0, column)
         grid.setColumnStretch(4, 1)
@@ -499,16 +329,13 @@ class HomePage(Page):
         self.btn_check = Button("Проверить доступность", variant="primary")
         self.btn_check.clicked.connect(self._run_check)
         actions.addWidget(self.btn_check)
-        self.btn_vpn_check = Button("Проверить VPN")
-        self.btn_vpn_check.clicked.connect(self._check_vpn_exit)
-        actions.addWidget(self.btn_vpn_check)
         self.btn_diag = Button("Диагностика")
         self.btn_diag.clicked.connect(
             lambda: self.context.navigate.emit("diagnostics")
         )
         actions.addWidget(self.btn_diag)
-        self.btn_restart = Button("Перезапустить", variant="ghost")
-        self.btn_restart.clicked.connect(self._restart_all)
+        self.btn_restart = Button("Перезапустить обход", variant="ghost")
+        self.btn_restart.clicked.connect(self._restart_bypass)
         actions.addWidget(self.btn_restart)
         actions.addStretch(1)
         card.add_layout(actions)
@@ -519,136 +346,160 @@ class HomePage(Page):
 
         self.body.addWidget(card)
 
-    def _restart_all(self) -> None:
-        """Перезапустить то, что сейчас включено."""
-        status = self.context.status
-        vpn = self.context.vpn_status
-        if not status.running and not vpn.running:
-            self.context.warn("Нечего перезапускать — ничего не включено.")
+    def _restart_bypass(self) -> None:
+        if not self.context.status.running:
+            self.context.warn("Обход не запущен — нечего перезапускать.")
             return
-        if status.running:
-            self.switch_zapret.setChecked(False, animate=False)
-            self._toggle_zapret(False)
-            QTimer.singleShot(1200, lambda: self._toggle_zapret(True))
-        if vpn.running:
-            QTimer.singleShot(2400, lambda: self._toggle_vpn(False))
-            QTimer.singleShot(3600, lambda: self._toggle_vpn(True))
+        self.stop_bypass()
+        QTimer.singleShot(1400, self.start_bypass)
 
     # --- состояние -------------------------------------------------------
 
     def on_activate(self) -> None:
         self._sync_dns()
         self._sync_filters()
-        self._reload_strategies()
-        self._reload_servers()
         self.context.refresh_status(force=True)
-        self.context.refresh_vpn_status(force=True)
-        self._check_foreign_tunnel()
-
-    def _check_foreign_tunnel(self) -> None:
-        foreign = vpn_engine.foreign_tunnel_pids()
-        if not foreign:
-            self.banner_foreign.setVisible(False)
-            return
-        self.banner_foreign.set_text(
-            "Другая программа уже держит VPN-туннель (например, Happ). "
-            "Два туннеля одновременно конфликтуют — отключите её, прежде чем "
-            "включать VPN здесь. Чужой процесс программа не трогает."
-        )
-        self.banner_foreign.setVisible(True)
-
-    def _reload_strategies(self) -> None:
-        # Списки выбора переехали на свои страницы — здесь только показ.
-        self._refresh()
-
-    def _reload_servers(self) -> None:
-        self._refresh()
+        self.context.refresh_tunnels(force=True)
 
     def _lane_clicked(self, key: str) -> None:
-        if key == "vpn":
-            self.context.navigate.emit("servers")
-        elif key == "zapret":
+        if key == "zapret":
             self.context.navigate.emit("strategies")
+        elif key == "dns":
+            self.context.navigate.emit("dns")
+        elif key == "vpn":
+            self.context.navigate.emit("diagnostics")
 
     def _refresh(self) -> None:
+        from app.core import dnsctl
+
         status = self.context.status
-        vpn = self.context.vpn_status
+        tunnels = self.context.tunnels
+        dns_preset = dnsctl.current_preset()
+        dns_on = dns_preset != "auto"
+        dns_title = next(
+            (item.title for item in dnsctl.PRESETS if item.key == dns_preset), ""
+        )
 
         self.switch_zapret.blockSignals(True)
         self.switch_zapret.setChecked(status.running, animate=False)
         self.switch_zapret.blockSignals(False)
-        self.switch_vpn.blockSignals(True)
-        self.switch_vpn.setChecked(vpn.running, animate=False)
-        self.switch_vpn.blockSignals(False)
-
-        mode = str(config.get("vpn_mode", vpn_config.MODE_SELECTED))
-        if mode == vpn_config.MODE_EXCEPT:
-            vpn_apps = ["всё, кроме выбранных"]
-        elif mode == vpn_config.MODE_ALL:
-            vpn_apps = ["весь трафик"]
-        else:
-            names = list(config.get("vpn_apps", []) or [])
-            vpn_apps = [apps_module._pretty_name(name) for name in names[:3]] or ["никто"]
 
         self.rails.update_state(
             zapret_on=status.running,
-            vpn_on=vpn.running,
-            vpn_apps=vpn_apps if vpn.running else [],
             zapret_targets=["YouTube", "Discord"] if status.running else [],
+            dns_on=dns_on,
+            dns_note=dns_title,
+            tunnels=tunnels,
             direct_note="остальное",
         )
 
-        if status.running and vpn.running:
-            self.state_title.setText("Работают zapret и VPN")
+        if tunnels and status.running:
+            self.state_title.setText("Обход работает вместе с VPN")
             self.state_detail.setText(
-                "Выбранные программы идут через туннель, остальные — напрямую "
-                "с обходом DPI."
+                f"Поднят чужой туннель ({', '.join(tunnels)}). Через него "
+                "трафик и так идёт в обход, а обход DPI может ему мешать — "
+                "лучше выключить что-то одно."
             )
-        elif vpn.running:
-            self.state_title.setText("Работает VPN")
-            self.state_detail.setText("Трафик уходит в туннель по вашим правилам.")
+        elif tunnels:
+            self.state_title.setText(f"Работает VPN — {', '.join(tunnels)}")
+            self.state_detail.setText(
+                "Трафик уходит в чужой туннель. Программа в это не вмешивается "
+                "и ничего не выключает."
+            )
+        elif status.running and dns_on:
+            self.state_title.setText("Работают обход и Smart DNS")
+            self.state_detail.setText(
+                "Сайты из списка открываются в обход блокировки, а DNS "
+                "возвращает сервисы, закрытые по стране."
+            )
         elif status.running:
-            self.state_title.setText("Работает zapret")
+            self.state_title.setText("Работает обход")
             self.state_detail.setText(
                 "Discord, YouTube и сайты из списка открываются в обход блокировки."
+            )
+        elif dns_on:
+            self.state_title.setText("Работает только Smart DNS")
+            self.state_detail.setText(
+                "Блокировку по стране обходим, но DPI провайдера — нет. "
+                "Включите обход, если сайты всё ещё не открываются."
             )
         else:
             self.state_title.setText("Всё идёт напрямую")
             self.state_detail.setText(
-                "Ничего не включено. Начните с zapret — он быстрее и не требует подписки."
+                "Ничего не включено. Начните с обхода — он быстрее VPN и "
+                "не требует подписки."
             )
 
+        self._sync_tunnel_banner(tunnels, status.running)
+
         self.stat_zapret.set_value(status.mode_label if status.running else "выключен")
-        self.stat_vpn.set_value(
-            vpn_config.MODE_LABELS.get(vpn.mode, "включён") if vpn.running else "выключен"
+        self.stat_dns.set_value(dns_title if dns_on else "выключен")
+
+        from app.core import strategies as strategies_module
+
+        self.stat_filter.set_value(
+            GAME_FILTER_LABELS.get(strategies_module.read_game_filter(), "—")
         )
 
         strategy = self.context.current_strategy()
         self.btn_strategy.setText(
             f"✦  {strategy.title}" if strategy else "✦  стратегия не выбрана"
         )
-        server = self.context.selected_server()
-        servers = self.context.servers()
-        if servers:
-            self.btn_server.setText(f"⇄  {server or servers[0].name}   ·   {len(servers)} серверов")
-        else:
-            self.btn_server.setText("⇄  подписка не настроена")
-
-        from app.core.vpn import subscription as sub
-        _, info = sub.load_cached()
-        days = info.days_left
-        if not servers:
-            self.stat_subscription.set_value("—")
-        elif days is None:
-            self.stat_subscription.set_value("бессрочная")
-        else:
-            self.stat_subscription.set_value(f"{days} дн.")
-
-        self._refresh_tunnel()
+        self.dns_state.setText("включён" if dns_on else "выключен")
         self._refresh_uptime()
 
+    def _sync_tunnel_banner(self, tunnels: list[str], zapret_on: bool) -> None:
+        if not tunnels:
+            self.banner_tunnel.setVisible(False)
+            return
+
+        names = ", ".join(tunnels)
+        if zapret_on:
+            self.banner_tunnel.set_kind("warn")
+            self.banner_tunnel.set_text(
+                f"Одновременно работают обход и VPN ({names}). Обход правит "
+                "пакеты уже на входе в туннель, и VPN может из-за этого рваться. "
+                "Оставьте что-то одно."
+            )
+            self.banner_tunnel.action.setVisible(True)
+        else:
+            self.banner_tunnel.set_kind("ok")
+            self.banner_tunnel.set_text(
+                f"Обнаружен VPN: {names}. Программа его не трогает — ни адаптер, "
+                "ни процесс. Обход выключен, они друг другу не мешают."
+            )
+            self.banner_tunnel.action.setVisible(False)
+        self.banner_tunnel.setVisible(True)
+
+    def _update_available(self, kind: str, info) -> None:
+        if info is None:
+            self._pending_updates.pop(kind, None)
+        else:
+            self._pending_updates[kind] = info
+        self._sync_update_banner()
+
+    def _sync_update_banner(self) -> None:
+        core = self._pending_updates.get("core")
+        app_info = self._pending_updates.get("app")
+        if app_info is not None:
+            self.banner_update.set_text(
+                f"Вышла новая версия программы {app_info.latest}. Установится "
+                "сама: программа закроется и откроется уже обновлённой."
+            )
+        elif core is not None:
+            self.banner_update.set_text(
+                f"Вышло обновление ядра zapret {core.latest} — свежие стратегии "
+                "и списки. Обход на пару секунд перезапустится."
+            )
+        self.banner_update.setVisible(bool(core or app_info))
+
+    def _install_pending(self) -> None:
+        kind = "app" if "app" in self._pending_updates else "core"
+        self.context.navigate.emit("updates")
+        self.context.install_update.emit(kind)
+
     def _refresh_uptime(self) -> None:
-        seconds = max(engine.uptime_seconds(), vpn_engine.uptime_seconds())
+        seconds = engine.uptime_seconds()
         if not seconds:
             self.stat_uptime.set_value("—")
             return
@@ -658,7 +509,19 @@ class HomePage(Page):
             f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
         )
 
-    # --- переключатели ---------------------------------------------------
+    # --- переключатель ---------------------------------------------------
+
+    def toggle_bypass(self) -> None:
+        """Тумблер из трея: включить, если выключено, и наоборот."""
+        self._toggle_zapret(not self.context.status.running)
+
+    def start_bypass(self) -> None:
+        if not self.context.status.running:
+            self._toggle_zapret(True)
+
+    def stop_bypass(self) -> None:
+        if self.context.status.running:
+            self._toggle_zapret(False)
 
     def _toggle_zapret(self, value: bool) -> None:
         if self._busy_zapret:
@@ -675,13 +538,13 @@ class HomePage(Page):
             mode = str(config.get("run_mode"))
             worker = Worker(self)
             worker.finished.connect(
-                lambda _: self._zapret_done(f"Zapret включён — «{strategy.title}»")
+                lambda _: self._zapret_done(f"Обход включён — «{strategy.title}»")
             )
             worker.failed.connect(lambda msg: self._zapret_done(msg, error=True))
             worker.run(engine.start, strategy, mode)
         else:
             worker = Worker(self)
-            worker.finished.connect(lambda _: self._zapret_done("Zapret выключен"))
+            worker.finished.connect(lambda _: self._zapret_done("Обход выключен"))
             worker.failed.connect(lambda msg: self._zapret_done(msg, error=True))
             worker.run(engine.stop)
         self._zapret_worker = worker
@@ -691,62 +554,6 @@ class HomePage(Page):
         self.spinner.stop()
         self.switch_zapret.setEnabled(True)
         self.context.refresh_status(force=True)
-        (self.context.error if error else self.context.ok)(message)
-
-    def _toggle_vpn(self, value: bool) -> None:
-        if self._busy_vpn:
-            return
-        self._busy_vpn = True
-        self.spinner.start()
-        self.switch_vpn.setEnabled(False)
-
-        if value:
-            # Чужой туннель займёт адаптер, и наш просто не поднимется.
-            if not self._resolve_foreign_clients():
-                self._vpn_done("Запуск отменён", error=False)
-                return
-            servers = self.context.servers()
-            if not servers:
-                self._vpn_done(
-                    "Сначала добавьте подписку на вкладке «Серверы».", error=True
-                )
-                self.context.navigate.emit("servers")
-                return
-            selected = self.context.selected_server()
-            mode = str(config.get("vpn_mode", vpn_config.MODE_SELECTED))
-            vpn_apps = list(config.get("vpn_apps", []) or [])
-            direct_apps = list(config.get("vpn_direct_apps", []) or [])
-            stack = str(config.get("vpn_stack", vpn_config.STACK_DEFAULT))
-            auto_exclude = bool(config.get("vpn_auto_exclude", True))
-
-            def job():
-                # Иначе zapret порежет трафик до самого VPN-сервера.
-                if auto_exclude:
-                    integration.sync_excludes(servers)
-                vpn_engine.on_progress = lambda text: worker.progress.emit(text, 0)
-                try:
-                    vpn_engine.start(servers, selected, mode, vpn_apps,
-                                     direct_apps, stack)
-                finally:
-                    vpn_engine.on_progress = None
-
-            worker = Worker(self)
-            worker.progress.connect(lambda text, _v: self.state_detail.setText(text))
-            worker.finished.connect(lambda _: self._vpn_done("VPN включён"))
-            worker.failed.connect(lambda msg: self._vpn_done(msg, error=True))
-            worker.run(job)
-        else:
-            worker = Worker(self)
-            worker.finished.connect(lambda _: self._vpn_done("VPN выключен"))
-            worker.failed.connect(lambda msg: self._vpn_done(msg, error=True))
-            worker.run(vpn_engine.stop)
-        self._vpn_worker = worker
-
-    def _vpn_done(self, message: str, error: bool = False) -> None:
-        self._busy_vpn = False
-        self.spinner.stop()
-        self.switch_vpn.setEnabled(True)
-        self.context.refresh_vpn_status(force=True)
         (self.context.error if error else self.context.ok)(message)
 
     # --- проверка --------------------------------------------------------
@@ -810,11 +617,6 @@ class HomePage(Page):
         self.check_spinner.set_color(accent)
         self.switch_zapret.set_colors(
             self.context.color("lane_zapret"),
-            self.context.color("border_strong"),
-            self.context.color("surface"),
-        )
-        self.switch_vpn.set_colors(
-            self.context.color("lane_vpn"),
             self.context.color("border_strong"),
             self.context.color("surface"),
         )

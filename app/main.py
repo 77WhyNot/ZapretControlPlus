@@ -156,10 +156,11 @@ def main() -> int:
         if splash is not None:
             splash.step(message, value)
 
-    # Если прошлый сеанс закончился падением, чужой сетевой адаптер мог
-    # остаться выключенным. Возвращаем его до всего остального.
+    # Версии 2.x умели временно отключать чужой сетевой адаптер и при
+    # падении оставляли его выключенным. Возвращаем до всего остального,
+    # иначе у человека не поднимется его VPN-клиент.
     try:
-        from app.core.vpn.engine import restore_paused_adapters
+        from app.core.netadapters import restore_paused_adapters
 
         restored = restore_paused_adapters()
         if restored:

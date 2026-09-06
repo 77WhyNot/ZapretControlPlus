@@ -218,9 +218,17 @@ def install_core_update(info: UpdateInfo, progress: Progress | None = None) -> s
 
     if was_running:
         report("Перезапуск обхода…", 96)
-        strategy = strategies.find_strategy(
-            previous_strategy, strategies.read_game_filter()
-        )
+        game_filter = strategies.read_game_filter()
+        strategy = strategies.find_strategy(previous_strategy, game_filter)
+        if strategy is None:
+            # Стратегию могли переименовать в новом ядре — обход всё равно
+            # должен вернуться, а не остаться молча выключенным.
+            strategy = strategies.find_strategy("general", game_filter)
+            if strategy is None:
+                fallback = strategies.load_strategies(game_filter)
+                strategy = fallback[0] if fallback else None
+            if strategy is not None:
+                config.set("last_strategy", strategy.id)
         if strategy is not None:
             try:
                 engine.start(strategy, previous_mode)

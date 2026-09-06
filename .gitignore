@@ -1,6 +1,7 @@
 # Сборка
 dist/
 build/pyi/
+build/pyi-test/
 build/pyi_test/
 build/testdist/
 build/art/

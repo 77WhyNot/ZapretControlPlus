@@ -40,35 +40,6 @@ if ($LASTEXITCODE -ne 0) { throw "make_icon.py завершился с ошиб�
 & python build\make_installer_art.py
 if ($LASTEXITCODE -ne 0) { throw "make_installer_art.py завершился с ошибкой" }
 
-# --- движок VPN -----------------------------------------------------------
-Step "Движок sing-box"
-$singboxDir = Join-Path $root "payload\singbox"
-$singboxExe = Join-Path $singboxDir "sing-box.exe"
-$singboxVersion = "1.13.19"
-
-if (Test-Path $singboxExe) {
-    Write-Host "уже на месте: $([math]::Round((Get-Item $singboxExe).Length / 1MB, 1)) МБ"
-}
-else {
-    Write-Host "скачиваю sing-box $singboxVersion..."
-    New-Item -ItemType Directory -Force -Path $singboxDir | Out-Null
-    $archive = Join-Path $env:TEMP "sing-box-$singboxVersion.zip"
-    $url = "https://github.com/SagerNet/sing-box/releases/download/v$singboxVersion/sing-box-$singboxVersion-windows-amd64.zip"
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
-    }
-    catch {
-        throw "Не удалось скачать sing-box. Проверьте интернет или скачайте вручную: $url"
-    }
-    $unpacked = Join-Path $env:TEMP "sing-box-$singboxVersion"
-    Expand-Archive -Path $archive -DestinationPath $unpacked -Force
-    Get-ChildItem $unpacked -Recurse -File | ForEach-Object {
-        Copy-Item $_.FullName -Destination $singboxDir -Force
-    }
-    Remove-Item $archive -Force -ErrorAction SilentlyContinue
-    Write-Host "готово: $([math]::Round((Get-Item $singboxExe).Length / 1MB, 1)) МБ"
-}
-
 # --- проверки -------------------------------------------------------------
 if (-not $SkipTests) {
     Step "Проверка кода"

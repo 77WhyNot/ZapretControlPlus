@@ -42,7 +42,15 @@ class UpdatesPage(Page):
         self._build_core_card()
         self._build_app_card()
         self._build_settings_card()
+        context.install_update.connect(self._install_requested)
         self.apply_theme()
+
+    def _install_requested(self, kind: str) -> None:
+        """Кнопка на главной: поставить найденное обновление."""
+        if kind == "core":
+            self.install_core()
+        elif kind == "app":
+            self.install_app()
 
     # --- ядро ------------------------------------------------------------
 
@@ -159,12 +167,15 @@ class UpdatesPage(Page):
             self.btn_core_install.setVisible(True)
             if manual:
                 self.context.warn(f"Доступна версия ядра {info.latest}")
-            elif config.get("auto_install_core_updates", False):
+            elif config.get("auto_install_core_updates", True):
                 self.install_core(silent=True)
+            else:
+                self.context.update_available.emit("core", info)
         else:
             self.core_badge.update_state("актуальная версия", "ok")
             self.core_status.setText(f"Установлена свежая версия ядра ({info.current}).")
             self.btn_core_install.setVisible(False)
+            self.context.update_available.emit("core", None)
             if manual:
                 self.context.ok("У вас последняя версия ядра")
 
@@ -208,6 +219,7 @@ class UpdatesPage(Page):
         self.core_status.setText(f"Ядро обновлено до версии {version}.")
         self.context.strategies_changed.emit()
         self.context.refresh_status(force=True)
+        self.context.update_available.emit("core", None)
         self.context.ok(f"Ядро zapret обновлено до {version}")
 
     def _core_install_failed(self, message: str) -> None:
@@ -307,12 +319,14 @@ class UpdatesPage(Page):
             self.app_badge.update_state("есть обновление", "warn")
             self.app_status.setText(f"Доступна версия {info.latest}.")
             self.btn_app_install.setVisible(True)
+            self.context.update_available.emit("app", info)
             if manual:
                 self.context.warn(f"Доступна версия приложения {info.latest}")
         else:
             self.app_badge.update_state("актуальная версия", "ok")
             self.app_status.setText("У вас последняя версия приложения.")
             self.btn_app_install.setVisible(False)
+            self.context.update_available.emit("app", None)
             if manual:
                 self.context.ok("У вас последняя версия приложения")
 
@@ -391,7 +405,7 @@ class UpdatesPage(Page):
         ))
         card.add(Divider())
 
-        self.switch_auto = Switch(bool(config.get("auto_install_core_updates", False)))
+        self.switch_auto = Switch(bool(config.get("auto_install_core_updates", True)))
         self.switch_auto.toggled.connect(
             lambda value: config.set("auto_install_core_updates", value)
         )

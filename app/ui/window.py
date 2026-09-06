@@ -42,11 +42,9 @@ from app.ui.pages.diagnostics import DiagnosticsPage
 from app.ui.pages.dns import DnsPage
 from app.ui.pages.home import HomePage
 from app.ui.pages.lists import ListsPage
-from app.ui.pages.servers import ServersPage
 from app.ui.pages.settings import SettingsPage
 from app.ui.pages.strategies import StrategiesPage
 from app.ui.pages.updates import UpdatesPage
-from app.ui.pages.vpnapps import VpnAppsPage
 from app.ui.widgets import IconLabel, Toast
 
 # --- нативные константы --------------------------------------------------
@@ -82,18 +80,16 @@ class MONITORINFO(ctypes.Structure):
 # В боковом меню видны только те разделы, куда заходят регулярно.
 # Остальные никуда не делись — они за кнопкой «Ещё».
 PRIMARY_PAGES = (
-    ("home", "Маршруты", "shield_check"),
-    ("servers", "Серверы", "globe"),
-    ("vpnapps", "Приложения", "layers"),
-    ("dns", "DNS", "bolt"),
+    ("home", "Обзор", "shield_check"),
     ("strategies", "Стратегии", "refresh"),
+    ("dns", "Smart DNS", "bolt"),
+    ("lists", "Списки сайтов", "list"),
     ("diagnostics", "Диагностика", "stethoscope"),
+    ("settings", "Настройки", "settings"),
 )
 
 MORE_PAGES = (
-    ("lists", "Списки", "list"),
     ("updates", "Обновления", "download"),
-    ("settings", "Настройки", "settings"),
     ("about", "О программе", "info"),
 )
 
@@ -104,6 +100,7 @@ class TitleBar(QWidget):
     minimize_requested = Signal()
     maximize_requested = Signal()
     close_requested = Signal()
+    theme_toggle_requested = Signal()
 
     def __init__(self, context: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -133,6 +130,13 @@ class TitleBar(QWidget):
 
         layout.addStretch(1)
 
+        # Светлая или тёмная — в один клик, не заходя в настройки.
+        self.btn_theme = self._window_button("moon", "WinButton")
+        self.btn_theme.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_theme.clicked.connect(self.theme_toggle_requested.emit)
+        layout.addWidget(self.btn_theme)
+        layout.addSpacing(6)
+
         self.btn_min = self._window_button("minimize", "WinButton")
         self.btn_max = self._window_button("maximize", "WinButton")
         self.btn_close = self._window_button("close", "WinClose")
@@ -158,6 +162,14 @@ class TitleBar(QWidget):
         for button in (self.btn_min, self.btn_max, self.btn_close):
             name = str(button.property("iconName"))
             button.setIcon(icons.icon(name, self.context.color("text_dim"), 16))
+        dark = self.context.is_dark
+        self.btn_theme.setProperty("iconName", "sun" if dark else "moon")
+        self.btn_theme.setIcon(icons.icon(
+            "sun" if dark else "moon", self.context.color("text_dim"), 16
+        ))
+        self.btn_theme.setToolTip(
+            "Переключить на светлую тему" if dark else "Переключить на тёмную тему"
+        )
 
     def set_maximized(self, maximized: bool) -> None:
         name = "restore" if maximized else "maximize"
@@ -250,6 +262,7 @@ class MainWindow(QWidget):
         self.title_bar.minimize_requested.connect(self.showMinimized)
         self.title_bar.maximize_requested.connect(self.toggle_maximize)
         self.title_bar.close_requested.connect(self.close)
+        self.title_bar.theme_toggle_requested.connect(self._toggle_theme)
         root_layout.addWidget(self.title_bar)
 
         body = QWidget(self.root)
@@ -285,8 +298,6 @@ class MainWindow(QWidget):
         # долго, и окно успевало показаться недостроенным.
         self._factories = {
             "home": HomePage,
-            "servers": ServersPage,
-            "vpnapps": VpnAppsPage,
             "dns": DnsPage,
             "strategies": StrategiesPage,
             "lists": ListsPage,
@@ -342,12 +353,27 @@ class MainWindow(QWidget):
 
     # --- тема ------------------------------------------------------------
 
+    def _toggle_theme(self) -> None:
+        """Кнопка в заголовке: светлая ↔ последняя тёмная."""
+        from app.ui import theme as theme_module
+
+        current = str(config.get("theme"))
+        if self.context.is_dark:
+            if theme_module.THEME_BY_KEY.get(current) and theme_module.THEME_BY_KEY[current].dark:
+                config.set("last_dark_theme", current)
+            config.set("theme", "light")
+        else:
+            wanted = str(config.get("last_dark_theme", "rails"))
+            if wanted not in theme_module.THEME_BY_KEY:
+                wanted = "rails"
+            config.set("theme", wanted)
+        self.apply_theme()
+
     def apply_theme(self) -> None:
-        from app.ui import appicons, icons as icon_cache
+        from app.ui import icons as icon_cache
 
         # Цвета изменились — кэш нарисованных иконок больше не годится.
         icon_cache.clear_cache()
-        appicons.clear_cache()
 
         qss = self.context.rebuild_theme()
 
@@ -414,9 +440,13 @@ class MainWindow(QWidget):
         self.pages.setCurrentWidget(widget)
         if changed:
             self._fade_in(widget)
+        # Группа исключающая: снять галочку со всех она не даёт, и при
+        # переходе в раздел из «Ещё» прошлый пункт оставался подсвеченным.
+        self.nav_group.setExclusive(False)
         for nav_key, button in self.nav_buttons.items():
             button.setChecked(nav_key == key)
             button.apply_theme()
+        self.nav_group.setExclusive(True)
 
         # Раздел из «Ещё» подсвечиваем самой кнопкой «Ещё».
         more_keys = {item[0] for item in MORE_PAGES}
@@ -601,7 +631,42 @@ class MainWindow(QWidget):
 
     def _poll_state(self, force: bool = False) -> None:
         self.context.refresh_status(force=force)
-        self.context.refresh_vpn_status(force=force)
+        before = self.context.tunnels
+        after = self.context.refresh_tunnels(force=force)
+        if after != before:
+            self._tunnel_changed(before, after)
+
+    def _tunnel_changed(self, before: list[str], after: list[str]) -> None:
+        """Чужой VPN подняли или опустили — подстроиться, не мешая ему.
+
+        Через туннель трафик и так идёт в обход, а winws продолжает резать
+        пакеты уже на входе в туннель, и клиент получает их искажёнными.
+        Поэтому на время чужого VPN обход снимаем, а после — возвращаем.
+        """
+        if not config.get("pause_zapret_with_vpn", True):
+            return
+
+        if after and not before:
+            if not self.context.status.running:
+                return
+            config.set("zapret_paused_by_vpn", True)
+            names = ", ".join(after)
+            self._show_toast(
+                f"Обнаружен VPN ({names}) — обход снят, чтобы не мешать. "
+                "Верну сам, когда выключите VPN.", "warn"
+            )
+            QTimer.singleShot(0, lambda: self._auto_toggle(False))
+        elif before and not after and config.get("zapret_paused_by_vpn", False):
+            config.set("zapret_paused_by_vpn", False)
+            self._show_toast("VPN выключен — возвращаю обход.", "ok")
+            QTimer.singleShot(600, lambda: self._auto_toggle(True))
+
+    def _auto_toggle(self, start: bool) -> None:
+        """Включить или выключить обход тем же путём, что и кнопка на странице."""
+        home = self.ensure_page("home")
+        method = getattr(home, "start_bypass" if start else "stop_bypass", None)
+        if callable(method):
+            method()
 
     def _engine_changed(self) -> None:
         QTimer.singleShot(0, lambda: self._poll_state(force=True))

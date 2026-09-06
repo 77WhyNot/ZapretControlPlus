@@ -19,15 +19,15 @@ AppPublisherURL={#AppUrl}
 AppSupportURL={#AppUrl}/issues
 AppUpdatesURL={#AppUrl}/releases
 VersionInfoVersion={#AppVersion}
-VersionInfoDescription={#AppName} — обход блокировок и VPN
+VersionInfoDescription={#AppName} — обход блокировок и Smart DNS
 
 DefaultDirName={autopf}\Zapret Control Plus
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 AllowNoIcons=yes
 
-; Нужны права администратора: WinDivert грузит драйвер ядра, служба zapret
-; создаётся в системе, а sing-box поднимает сетевой адаптер.
+; Нужны права администратора: WinDivert грузит драйвер ядра, а служба
+; zapret создаётся в системе.
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -62,17 +62,13 @@ Name: "autostart"; Description: "Запускать программу вмес�
 
 [Files]
 Source: "..\dist\ZapretControlPlus\*"; DestDir: "{app}"; \
-    Excludes: "core,singbox"; \
+    Excludes: "core"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Ядро zapret. onlyifdoesntexist бережёт списки пользователя и то ядро,
 ; которое программа уже обновила сама из GitHub.
 Source: "..\payload\zapret\*"; DestDir: "{app}\core"; \
     Flags: onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
-
-; Движок VPN. Обновляется только вместе с программой, поэтому ignoreversion.
-Source: "..\payload\singbox\*"; DestDir: "{app}\singbox"; \
-    Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -106,7 +102,6 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/delete /f /tn ""ZapretControlPlus 
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\core"
-Type: filesandordirs; Name: "{app}\singbox"
 Type: filesandordirs; Name: "{app}\_internal"
 Type: dirifempty; Name: "{app}"
 
@@ -220,6 +215,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
   Internal: String;
+  Legacy: String;
 begin
   NeedsRestart := False;
   if IsAppRunning() then
@@ -229,11 +225,12 @@ begin
     Sleep(1200);
   end;
 
-  { Свой sing-box снимаем только из папки программы: одноимённый процесс
-    может принадлежать другому VPN-клиенту, и трогать его нельзя. }
-  Exec('taskkill.exe',
-       ExpandConstant('/f /fi "IMAGENAME eq sing-box.exe" /fi "STATUS eq RUNNING"'),
-       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { Наследство версий 2.x: свой движок VPN. Процессы при этом не трогаем —
+    одноимённый sing-box.exe принадлежит чужому клиенту (Happ и подобным),
+    и снимать его мы не вправе. }
+  Legacy := ExpandConstant('{app}\singbox');
+  if DirExists(Legacy) then
+    DelTree(Legacy, True, True, True);
 
   { Библиотеки Qt между версиями меняются — старую папку чистим целиком. }
   Internal := ExpandConstant('{app}\_internal');
@@ -261,7 +258,7 @@ begin
     DataDir := ExpandConstant('{localappdata}\ZapretControlPlus');
     if DirExists(DataDir) then
     begin
-      if MsgBox('Удалить настройки программы, ссылку на подписку и журнал?' + #13#10 +
+      if MsgBox('Удалить настройки программы и журнал?' + #13#10 +
                 'Списки доменов и резервные копии тоже будут удалены.',
                 mbConfirmation, MB_YESNO) = IDYES then
         DelTree(DataDir, True, True, True);
