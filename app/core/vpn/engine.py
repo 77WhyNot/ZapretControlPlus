@@ -166,6 +166,19 @@ class VpnEngine:
     def transport(self) -> str:
         return self._transport
 
+    def proxy_url(self) -> str | None:
+        """HTTP-прокси нашего движка, когда VPN работает режимом «Прокси».
+
+        В этом режиме трафик уходит в VPN только через системный прокси, а он
+        локальный. Проверка доступности должна идти этим же путём, иначе она
+        тестирует прямой (заблокированный) канал и показывает «недоступно».
+        """
+        if (self.status().running
+                and self._transport == config_module.TRANSPORT_PROXY
+                and self._probe_port):
+            return f"http://127.0.0.1:{self._probe_port}"
+        return None
+
     # --- наследство прошлого запуска -------------------------------------
 
     def restore_leftovers(self) -> list[str]:
@@ -236,10 +249,59 @@ class VpnEngine:
                 raise VpnError("Нужны права администратора: VPN создаёт сетевой адаптер.")
 
         self.stop(quiet=True)
-        if transport == config_module.TRANSPORT_TUN:
-            # После падения наш адаптер мог остаться и держать маршруты.
-            remove_own_adapter()
 
+        # Туннель на холодную нередко не встаёт с первой попытки: Windows долго
+        # создаёт адаптер Wintun, а от прерванной попытки остаётся «повисший»
+        # адаптер, и sing-box жалуется «create adapter: file already exists».
+        # Лечится одним — убрать свой адаптер и попробовать снова. Ровно это и
+        # делал ручной путь «прокси → туннель». Прокси встаёт сразу, ему повтор
+        # не нужен.
+        attempts = 3 if transport == config_module.TRANSPORT_TUN else 1
+        last_error = ""
+        for attempt in range(attempts):
+            if transport == config_module.TRANSPORT_TUN:
+                # Свой брошенный адаптер держит маршруты и мешает создать новый.
+                remove_own_adapter()
+                if attempt:
+                    time.sleep(1.5)
+            try:
+                self._start_once(servers, selected, mode, vpn_apps, direct_apps,
+                                 stack, transport, settings)
+                return
+            except VpnError as exc:
+                last_error = str(exc)
+                if transport != config_module.TRANSPORT_TUN or not self._adapter_conflict():
+                    raise
+                logs.warn(
+                    f"Туннель не поднялся ({last_error}); убираю свой адаптер "
+                    "и пробую снова"
+                )
+        self.stop(quiet=True)
+        raise VpnError(
+            (last_error + " Помогает перезагрузка компьютера.")
+            if last_error else "VPN не поднялся."
+        )
+
+    def _adapter_conflict(self) -> bool:
+        """Движок не смог создать или открыть адаптер — поможет повторная попытка."""
+        text = " ".join(self._last_output[-14:]).lower()
+        return any(marker in text for marker in (
+            "already exists", "element not found", "configure tun",
+            "create adapter", "take too much time", "open interface",
+        ))
+
+    def _start_once(
+        self,
+        servers: list[Server],
+        selected: str,
+        mode: str,
+        vpn_apps: list[str] | None,
+        direct_apps: list[str] | None,
+        stack: str,
+        transport: str,
+        settings,
+    ) -> None:
+        exe = singbox_path()
         self._port = _free_port(self._port)
         self._secret = secrets.token_hex(16)
         self._last_output = []
@@ -310,6 +372,10 @@ class VpnEngine:
         notified_slow = False
         while time.time() < deadline:
             if process.poll() is not None:
+                # Процесс умер — прибираем свой мусор, чтобы повтор начался с нуля.
+                winapi.kill_processes_by_path(SINGBOX_EXE, str(singbox_path()))
+                with self._lock:
+                    self._process = None
                 raise VpnError(self._failure_reason())
             if self._clash_alive():
                 self._started_at = time.time()

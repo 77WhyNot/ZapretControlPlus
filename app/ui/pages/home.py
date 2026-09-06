@@ -728,10 +728,15 @@ class HomePage(Page):
 
         self.btn_check.setEnabled(False)
         self.check_spinner.start()
+        # В режиме «Прокси» VPN доступен только через локальный прокси —
+        # проверяем через него, иначе тест пойдёт мимо VPN.
+        from app.core.vpn.engine import vpn_engine
+
+        proxy_url = vpn_engine.proxy_url()
         worker = Worker(self)
         worker.finished.connect(self._check_ready)
         worker.failed.connect(self._check_failed)
-        worker.run(autotest.quick_check)
+        worker.run(autotest.quick_check, proxy_url)
         self._check_worker = worker
 
     def _check_failed(self, message: str) -> None:

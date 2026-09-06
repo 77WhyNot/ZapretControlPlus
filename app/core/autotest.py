@@ -120,10 +120,15 @@ def _humanize(key: str) -> str:
 # --- одиночные проверки --------------------------------------------------
 
 
-def _probe(target: Target, timeout: int = TEST_TIMEOUT) -> ProbeResult:
+def _probe(target: Target, timeout: int = TEST_TIMEOUT,
+           proxy_url: str | None = None) -> ProbeResult:
     """Новая сессия на каждую проверку: keep-alive скрыл бы смену стратегии."""
     session = requests.Session()
     session.trust_env = False
+    # Когда VPN работает режимом «Прокси», проверяем именно через него —
+    # иначе тест пойдёт мимо VPN по прямому каналу и покажет «недоступно».
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
     session.headers.update({"User-Agent": USER_AGENT, "Cache-Control": "no-cache"})
     started = time.perf_counter()
     ok = False
@@ -140,17 +145,22 @@ def _probe(target: Target, timeout: int = TEST_TIMEOUT) -> ProbeResult:
     return ProbeResult(target, ok, (time.perf_counter() - started) * 1000)
 
 
-def probe_all(targets: Iterable[Target], timeout: int = TEST_TIMEOUT) -> list[ProbeResult]:
+def probe_all(targets: Iterable[Target], timeout: int = TEST_TIMEOUT,
+              proxy_url: str | None = None) -> list[ProbeResult]:
     targets = list(targets)
     if not targets:
         return []
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(targets))) as pool:
-        return list(pool.map(lambda t: _probe(t, timeout), targets))
+        return list(pool.map(lambda t: _probe(t, timeout, proxy_url), targets))
 
 
-def quick_check() -> list[ProbeResult]:
-    """Быстрая проверка для главной страницы."""
-    return probe_all(load_targets()[:MAX_TARGETS])
+def quick_check(proxy_url: str | None = None) -> list[ProbeResult]:
+    """Быстрая проверка для главной страницы.
+
+    proxy_url задаётся, когда VPN работает режимом «Прокси»: тогда проверка
+    идёт через VPN, а не мимо него.
+    """
+    return probe_all(load_targets()[:MAX_TARGETS], proxy_url=proxy_url)
 
 
 # --- автоподбор ----------------------------------------------------------
