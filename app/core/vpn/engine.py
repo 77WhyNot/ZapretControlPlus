@@ -221,8 +221,8 @@ class VpnEngine:
             transport = config_module.TRANSPORT_TUN
 
         if transport == config_module.TRANSPORT_TUN:
-            if not winapi.is_admin():
-                raise VpnError("Нужны права администратора: VPN создаёт сетевой адаптер.")
+            # Сначала про чужой туннель: это самая частая и самая понятная
+            # причина, и для неё права не нужны.
             foreign = self.foreign_tunnels()
             if foreign:
                 names = ", ".join(foreign)
@@ -232,6 +232,8 @@ class VpnEngine:
                     "или переключите VPN в режим «Прокси» — он не трогает маршруты "
                     "и работает рядом с любым клиентом."
                 )
+            if not winapi.is_admin():
+                raise VpnError("Нужны права администратора: VPN создаёт сетевой адаптер.")
 
         self.stop(quiet=True)
         if transport == config_module.TRANSPORT_TUN:
