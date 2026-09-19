@@ -15,9 +15,16 @@ MAX_FILE_BYTES = 1_500_000
 _lock = threading.RLock()
 _buffer: deque[str] = deque(maxlen=MAX_LINES)
 _listeners: list[Callable[[str], None]] = []
+_writes = 0
 
 
 def _rotate_if_needed() -> None:
+    # Размер файла смотрим не на каждой строке: пачка из сотни строк иначе
+    # давала сотню лишних обращений к диску.
+    global _writes
+    _writes += 1
+    if _writes % 100 != 1:
+        return
     path = paths.log_path()
     try:
         if path.exists() and path.stat().st_size > MAX_FILE_BYTES:

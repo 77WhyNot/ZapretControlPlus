@@ -117,11 +117,30 @@ def _ipset_backup() -> Path:
     return paths.lists_dir() / "ipset-all.txt.backup"
 
 
+_text_cache: dict[str, tuple[float, int, str]] = {}
+
+
+def _read_cached(path: Path) -> str:
+    """Текст файла, перечитанный только если файл изменился.
+
+    Список IPSet — это десятки тысяч строк, и разбирать его заново при каждом
+    открытии вкладки значило терять заметную долю секунды.
+    """
+    stat = path.stat()
+    key = str(path)
+    cached = _text_cache.get(key)
+    if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        return cached[2]
+    text = path.read_text(encoding="utf-8", errors="replace")
+    _text_cache[key] = (stat.st_mtime, stat.st_size, text)
+    return text
+
+
 def ipset_mode() -> str:
     """Режим определяется так же, как в service.bat."""
     path = _ipset_path()
     try:
-        content = path.read_text(encoding="utf-8", errors="replace")
+        content = _read_cached(path)
     except OSError:
         return "any"
     stripped = content.strip()
@@ -136,7 +155,7 @@ def ipset_size() -> int:
     """Сколько подсетей в полном списке (в файле или в резервной копии)."""
     for path in (_ipset_path(), _ipset_backup()):
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = _read_cached(path)
         except OSError:
             continue
         if IPSET_STUB in text or not text.strip():

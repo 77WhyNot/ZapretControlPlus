@@ -38,6 +38,99 @@ def apply_variant(widget: QWidget, variant: str = "", size: str = "") -> QWidget
     return widget
 
 
+# --- плавность ------------------------------------------------------------
+
+
+class FrameClock(QObject):
+    """Один кадровый таймер на всю программу — вместо таймера у каждой анимации.
+
+    Анимации подписываются на него и сами считают положение по реальному
+    времени. Тогда кадр, пришедший с задержкой, просто рисует правильное
+    положение, а не «отстаёт на шаг», — движение не спотыкается. Когда
+    подписчиков нет или все они скрыты (окно в трее), таймер стоит.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        import weakref
+
+        self._subscribers = weakref.WeakSet()
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        # 30 кадров в секунду: пунктир ползёт медленно, и на глаз это так же
+        # гладко, как 60, а процессор нагружается вдвое меньше.
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._tick)
+
+    def subscribe(self, widget: QWidget) -> None:
+        self._subscribers.add(widget)
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def unsubscribe(self, widget: QWidget) -> None:
+        self._subscribers.discard(widget)
+        if not self._subscribers:
+            self._timer.stop()
+
+    def wake(self) -> None:
+        """Окно снова на экране — продолжить анимации, если они есть."""
+        if self._subscribers and not self._timer.isActive():
+            self._timer.start()
+
+    def _tick(self) -> None:
+        drawn = 0
+        for widget in list(self._subscribers):
+            try:
+                if widget.isVisible() and not widget.window().isMinimized():
+                    widget.update()
+                    drawn += 1
+            except RuntimeError:  # виджет уже удалён
+                self._subscribers.discard(widget)
+        # Ничего не видно (окно в трее или свёрнуто) — таймер засыпает и не
+        # будит процессор 60 раз в секунду. Проснётся по wake() или подписке.
+        if not drawn:
+            self._timer.stop()
+
+
+_clock: FrameClock | None = None
+
+
+def frame_clock() -> FrameClock:
+    global _clock
+    if _clock is None:
+        _clock = FrameClock()
+    return _clock
+
+
+def crossfade(host: QWidget, snapshot, duration: int = 190) -> None:
+    """Мягкая смена содержимого: старый кадр-картинка тает поверх нового.
+
+    Прозрачность считается для одной картинки, а не для живой страницы с
+    десятками виджетов, — поэтому переход не дёргается даже на тяжёлых
+    страницах.
+    """
+    from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+    if snapshot is None or snapshot.isNull():
+        return
+    overlay = QLabel(host)
+    overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+    overlay.setPixmap(snapshot)
+    overlay.setGeometry(0, 0, host.width(), host.height())
+    effect = QGraphicsOpacityEffect(overlay)
+    effect.setOpacity(1.0)
+    overlay.setGraphicsEffect(effect)
+    overlay.show()
+    overlay.raise_()
+    animation = QPropertyAnimation(effect, b"opacity", overlay)
+    animation.setDuration(duration)
+    animation.setStartValue(1.0)
+    animation.setEndValue(0.0)
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+    animation.finished.connect(overlay.deleteLater)
+    animation.start()
+
+
 def confirm(parent: QWidget, title: str, text: str, yes: str = "Да",
             no: str = "Нет", default_yes: bool = True) -> bool:
     """Вопрос «да или нет» в цветах темы.
@@ -351,32 +444,57 @@ class Toast(QFrame):
         self._icon.set_color(color)
         self._text.setText(text)
         self.adjustSize()
-        self._reposition()
+        target = self._target()
+        was_visible = self.isVisible()
         self.show()
         self.raise_()
+        if target is not None:
+            if was_visible:
+                self.move(target)
+            else:
+                # Выезжает снизу. Двигаем только положение — это дёшево,
+                # в отличие от прозрачности поверх тени.
+                from PySide6.QtCore import QPoint
+
+                slide = getattr(self, "_slide", None)
+                if slide is None:
+                    slide = QPropertyAnimation(self, b"pos", self)
+                    slide.setDuration(220)
+                    slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+                    self._slide = slide
+                slide.stop()
+                slide.setStartValue(target + QPoint(0, 18))
+                slide.setEndValue(target)
+                slide.start()
         self._timer.start(timeout)
 
-    def _reposition(self) -> None:
+    def _target(self):
         parent = self.parentWidget()
         if parent is None:
-            return
-        self.move(
-            parent.width() - self.width() - 24,
-            parent.height() - self.height() - 24,
-        )
+            return None
+        from PySide6.QtCore import QPoint
+
+        return QPoint(parent.width() - self.width() - 24,
+                      parent.height() - self.height() - 24)
+
+    def _reposition(self) -> None:
+        target = self._target()
+        if target is not None:
+            self.move(target)
 
 
 class Spinner(QWidget):
     """Круговой индикатор занятости."""
 
+    # Оборотов в секунду: скорость задана временем, а не числом кадров.
+    TURNS_PER_SECOND = 1.1
+
     def __init__(self, size: int = 18, color: str = "#2563EB",
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._angle = 0
         self._color = QColor(color)
+        self._started = 0.0
         self.setFixedSize(size, size)
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._advance)
         self.hide()
 
     def set_color(self, color: str) -> None:
@@ -384,18 +502,21 @@ class Spinner(QWidget):
         self.update()
 
     def start(self) -> None:
+        import time
+
+        if not self.isVisible():
+            self._started = time.perf_counter()
         self.show()
-        self._timer.start(28)
+        frame_clock().subscribe(self)
 
     def stop(self) -> None:
-        self._timer.stop()
+        frame_clock().unsubscribe(self)
         self.hide()
 
-    def _advance(self) -> None:
-        self._angle = (self._angle + 9) % 360
-        self.update()
-
     def paintEvent(self, event) -> None:  # noqa: N802
+        import time
+
+        angle = ((time.perf_counter() - self._started) * 360 * self.TURNS_PER_SECOND) % 360
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(2, 2, self.width() - 4, self.height() - 4)
@@ -404,7 +525,7 @@ class Spinner(QWidget):
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setColor(self._color)
         painter.setPen(pen)
-        painter.drawArc(rect, -self._angle * 16, 100 * 16)
+        painter.drawArc(rect, int(-angle * 16), 100 * 16)
         painter.end()
 
 
@@ -560,14 +681,26 @@ class Collapsible(QWidget):
     def toggle(self) -> None:
         self.set_expanded(not self._expanded)
 
+    # Выше этой высоты содержимое раскрывается без анимации высоты: каждый
+    # её кадр заново раскладывает всё содержимое, и длинные списки дёргались.
+    HEAVY_HEIGHT = 320
+
     def set_expanded(self, value: bool, animate: bool = True) -> None:
         if value == self._expanded:
             return
         self._expanded = value
         self._animation.stop()
+        heavy = self.content.sizeHint().height() > self.HEAVY_HEIGHT
         if not animate:
             self.content.setMaximumHeight(self.MAX_HEIGHT if value else 0)
             self.content.setVisible(value)
+        elif heavy:
+            # Раскладка — один раз, а плавность даёт «вуаль» цвета фона,
+            # которая тает поверх содержимого: её отрисовка почти бесплатна.
+            self.content.setMaximumHeight(self.MAX_HEIGHT if value else 0)
+            self.content.setVisible(value)
+            if value:
+                self._veil()
         elif value:
             self.content.setMaximumHeight(0)
             self.content.setVisible(True)
@@ -586,6 +719,33 @@ class Collapsible(QWidget):
             self.content.setMaximumHeight(self.MAX_HEIGHT)
         else:
             self.content.setVisible(False)
+
+    def _veil(self, duration: int = 240) -> None:
+        from PySide6.QtCore import QVariantAnimation
+
+        veil = QWidget(self.content)
+        veil.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        veil.setGeometry(0, 0, self.content.width() or self.width(),
+                         self.content.sizeHint().height())
+        base = QColor(self.context.color("bg", "#F4F6F9"))
+        veil.show()
+        veil.raise_()
+
+        def paint(alpha) -> None:
+            veil.setStyleSheet(
+                f"background: rgba({base.red()}, {base.green()}, {base.blue()}, "
+                f"{int(alpha)});"
+            )
+
+        fade = QVariantAnimation(veil)
+        fade.setDuration(duration)
+        fade.setStartValue(255.0)
+        fade.setEndValue(0.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        fade.valueChanged.connect(paint)
+        fade.finished.connect(veil.deleteLater)
+        paint(255)
+        fade.start()
 
     def _sync_chevron(self) -> None:
         self.chevron.set_icon("chevron_down" if self._expanded else "chevron_right")

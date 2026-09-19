@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import threading
 from ctypes import wintypes
 
 from PySide6.QtCore import (
@@ -18,12 +19,10 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QAction, QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
-    QGraphicsOpacityEffect,
     QButtonGroup,
     QHBoxLayout,
     QLabel,
     QMenu,
-    QMessageBox,
     QPushButton,
     QStackedWidget,
     QSystemTrayIcon,
@@ -51,7 +50,15 @@ from app.ui.pages.servers import VpnPage
 from app.ui.pages.telegram import TelegramPage
 from app.ui.pages.vpnapps import VpnAppsPage
 from app.ui.pages.updates import UpdatesPage
-from app.ui.widgets import IconLabel, Toast, confirm
+from app.ui.widgets import IconLabel, Toast, confirm, crossfade
+
+# Сколько длится переход между разделами; обновление данных страницы ждёт его.
+PAGE_TRANSITION_MS = 200
+
+# Опрос состояния системы: часто, пока окно на экране, и редко в трее — там
+# нужен только значок и автопауза обхода при чужом VPN.
+POLL_VISIBLE_MS = 2500
+POLL_HIDDEN_MS = 10000
 
 # --- нативные константы --------------------------------------------------
 
@@ -132,6 +139,22 @@ def _settings_section(context, parent):
         [("main", "Основное", SettingsPage), ("updates", "Обновления", UpdatesPage)],
         parent,
     )
+
+
+def collect_state() -> dict:
+    """Всё, что окно показывает о системе, одним снимком — в фоновом потоке."""
+    from app.core import dnsctl, netadapters
+    from app.core.tgws import tgws_engine
+    from app.core.vpn.engine import singbox_path, vpn_engine
+
+    return {
+        "status": engine.status(),
+        "tgws": tgws_engine.status(),
+        "vpn": vpn_engine.status(),
+        "tunnels": netadapters.tunnel_names(),
+        "foreign": netadapters.foreign_vpn_names(str(singbox_path())),
+        "dns": dnsctl.current_preset(),
+    }
 
 
 class TitleBar(QWidget):
@@ -248,11 +271,21 @@ class NavButton(QPushButton):
 
 
 class MainWindow(QWidget):
+    # Снимок состояния из фонового потока: сигнал сам доставит его в поток окна.
+    state_ready = Signal(object)
+    engine_changed = Signal()
+
     def __init__(self, on_progress=None) -> None:
         super().__init__()
         self._on_progress = on_progress or (lambda text, value: None)
         self.context = AppContext()
         self._force_quit = False
+        self._poll_busy = False
+        self._poll_force = False
+        self._closing = False
+        self.destroyed.connect(self._mark_closing)
+        self.state_ready.connect(self._apply_state)
+        self.engine_changed.connect(lambda: self._poll_state(force=True))
 
         self.setWindowFlags(
             Qt.WindowType.Window
@@ -276,7 +309,7 @@ class MainWindow(QWidget):
 
         self._poll = QTimer(self)
         self._poll.timeout.connect(self._poll_state)
-        self._poll.start(2500)
+        self._poll.start(POLL_VISIBLE_MS)
 
         # Программа живёт в трее неделями, а обновления выходят чаще. Раз в
         # полчаса тихо смотрим, не пора ли проверить версию; само уведомление
@@ -420,7 +453,18 @@ class MainWindow(QWidget):
             if wanted not in theme_module.THEME_BY_KEY:
                 wanted = "rails"
             config.set("theme", wanted)
+        self.apply_theme_animated()
+
+    def apply_theme_animated(self) -> None:
+        """Смена темы без мигания: снимок старого вида тает поверх нового.
+
+        Перекраска всех виджетов занимает долю секунды, и без снимка было
+        видно, как окно перерисовывается кусками.
+        """
+        snapshot = self.root.grab() if self.isVisible() else None
         self.apply_theme()
+        if snapshot is not None:
+            crossfade(self.root, snapshot, duration=280)
 
     def apply_theme(self) -> None:
         from app.ui import icons as icon_cache
@@ -502,10 +546,15 @@ class MainWindow(QWidget):
         widget = self.ensure_page(key)
         if widget is None:
             return
-        changed = self.pages.currentWidget() is not widget
+        previous = self.pages.currentWidget()
+        changed = previous is not widget
+        # Снимок уходящей страницы тает поверх новой: прозрачность считается
+        # для одной картинки, а не для страницы с десятками виджетов.
+        snapshot = previous.grab() if changed and previous is not None \
+            and self.isVisible() else None
         self.pages.setCurrentWidget(widget)
-        if changed:
-            self._fade_in(widget)
+        if snapshot is not None:
+            crossfade(self.pages, snapshot)
         # Группа исключающая: снять галочку со всех она не даёт, и при
         # переходе в раздел из «Ещё» прошлый пункт оставался подсвеченным.
         self.nav_group.setExclusive(False)
@@ -525,7 +574,12 @@ class MainWindow(QWidget):
         self._move_marker(key)
         activate = getattr(widget, "on_activate", None)
         if callable(activate):
-            activate()
+            if snapshot is not None:
+                # Обновление данных страницы — после перехода, иначе оно
+                # отнимает кадры у анимации.
+                QTimer.singleShot(PAGE_TRANSITION_MS, activate)
+            else:
+                activate()
 
     def _show_more_menu(self) -> None:
         """Разделы, которыми пользуются редко, — по кнопке «Ещё»."""
@@ -564,20 +618,6 @@ class MainWindow(QWidget):
         self._marker_animation.start()
         self.nav_marker.raise_()
 
-    def _fade_in(self, widget: QWidget) -> None:
-        """Короткое проявление страницы вместо резкой подмены."""
-        effect = QGraphicsOpacityEffect(widget)
-        widget.setGraphicsEffect(effect)
-        animation = QPropertyAnimation(effect, b"opacity", widget)
-        animation.setDuration(140)
-        animation.setStartValue(0.0)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        # Эффект снимаем сразу после показа: он рисует виджет через буфер
-        # и без нужды замедляет прокрутку.
-        animation.finished.connect(lambda: widget.setGraphicsEffect(None))
-        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
-
     # --- окно ------------------------------------------------------------
 
     def toggle_maximize(self) -> None:
@@ -591,6 +631,32 @@ class MainWindow(QWidget):
         super().changeEvent(event)
         if event.type() == event.Type.WindowStateChange:
             self.title_bar.set_maximized(self.isMaximized())
+            self._set_background(self.isMinimized())
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._set_background(self.isMinimized())
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self._set_background(True)
+
+    def _set_background(self, background: bool) -> None:
+        """В трее и свёрнутым окно не должно работать в полную силу.
+
+        Опрос системы реже, анимации стоят. Показали окно — сразу свежий
+        опрос и снова плавные анимации.
+        """
+        poll = getattr(self, "_poll", None)
+        if poll is None or background == getattr(self, "_background", None):
+            return
+        self._background = background
+        poll.setInterval(POLL_HIDDEN_MS if background else POLL_VISIBLE_MS)
+        if not background:
+            from app.ui.widgets import frame_clock
+
+            frame_clock().wake()
+            self._poll_state(force=True)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -696,12 +762,41 @@ class MainWindow(QWidget):
             self.tray.setToolTip(f"{APP_NAME} — обход выключен")
 
     def _poll_state(self, force: bool = False) -> None:
-        self.context.refresh_status(force=force)
-        self.context.refresh_tgws(force=force)
-        self.context.refresh_vpn_status(force=force)
-        self.context.refresh_foreign_vpn(force=force)
+        """Опрос состояния — в фоне: службы, процессы и адаптеры Windows
+        отвечают десятки миллисекунд, и в потоке окна это давало рывок
+        анимаций раз в пару секунд."""
+        if force:
+            self._poll_force = True
+        if self._poll_busy:
+            return
+        self._poll_busy = True
+        threading.Thread(target=self._collect_state, daemon=True).start()
+
+    def _collect_state(self) -> None:
+        snapshot = None
+        try:
+            snapshot = collect_state()
+        except Exception as exc:  # noqa: BLE001 — опрос не должен ронять окно
+            logs.warn(f"Опрос состояния не удался: {exc}")
+        # Окно могли закрыть, пока шёл опрос: тогда отдавать результат некому.
+        if self._closing:
+            return
+        try:
+            self.state_ready.emit(snapshot)
+        except RuntimeError:
+            pass
+
+    def _mark_closing(self, *_args) -> None:
+        self._closing = True
+
+    def _apply_state(self, snapshot) -> None:
+        self._poll_busy = False
+        force, self._poll_force = self._poll_force, False
+        if not snapshot:
+            return
         before = self.context.tunnels
-        after = self.context.refresh_tunnels(force=force)
+        self.context.apply_snapshot(snapshot, force=force)
+        after = self.context.tunnels
         if after != before:
             self._tunnel_changed(before, after)
 
@@ -738,7 +833,12 @@ class MainWindow(QWidget):
             method()
 
     def _engine_changed(self) -> None:
-        QTimer.singleShot(0, lambda: self._poll_state(force=True))
+        """Движок сообщил о перемене — из своего потока, поэтому через сигнал.
+
+        QTimer.singleShot из потока без цикла событий просто не срабатывает,
+        и статус на экране отставал до следующего планового опроса.
+        """
+        self.engine_changed.emit()
 
     # --- уведомления -----------------------------------------------------
 
@@ -893,6 +993,8 @@ class MainWindow(QWidget):
                 return
 
         self._force_quit = True
+        self._closing = True
+        self._poll.stop()
         self._save_geometry()
         logs.info("Выход из приложения")
         try:

@@ -141,10 +141,11 @@ class DnsPage(Page):
 
         self.body.addWidget(card)
 
-    def _refresh_adapters(self) -> None:
+    def _refresh_adapters(self, adapters=None) -> None:
         clear_layout(self.adapters_layout)
 
-        adapters = dnsctl.adapters()
+        if adapters is None:
+            adapters = dnsctl.adapters()
         if not adapters:
             self.adapters_layout.addWidget(
                 faint_label("Активных сетевых подключений не найдено.")
@@ -233,10 +234,21 @@ class DnsPage(Page):
         self._worker = worker
 
     def _sync(self) -> None:
-        current = dnsctl.current_preset()
+        """Настройки адаптеров читаются из реестра десятки миллисекунд — в фоне,
+        чтобы открытие вкладки не притормаживало."""
+        worker = getattr(self, "_sync_worker", None)
+        if worker is not None and worker.busy():
+            return
+        worker = Worker(self)
+        worker.finished.connect(self._synced)
+        worker.run(lambda: (dnsctl.current_preset(), dnsctl.adapters()))
+        self._sync_worker = worker
+
+    def _synced(self, payload) -> None:
+        current, adapters = payload
         for card in self._cards:
             card.set_active(card.preset.key == current)
-        self._refresh_adapters()
+        self._refresh_adapters(adapters)
 
     # --- страница --------------------------------------------------------
 

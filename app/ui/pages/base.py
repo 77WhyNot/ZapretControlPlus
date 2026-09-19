@@ -167,31 +167,27 @@ class TabbedPage(QWidget):
         page = self._pages.get(key)
         if page is None:
             return
+        from PySide6.QtCore import QTimer
+
+        from app.ui.widgets import crossfade
+
         changed = key != self._current
+        previous = self.stack.currentWidget()
+        snapshot = (previous.grab() if changed and activate and previous is not None
+                    and self.isVisible() else None)
         self._current = key
         for name, button in self._buttons.items():
             button.setChecked(name == key)
         self.stack.setCurrentWidget(page)
-        if changed and activate:
-            self._fade(page)
+        if snapshot is not None:
+            crossfade(self.stack, snapshot)
         if activate:
             handler = getattr(page, "on_activate", None)
             if callable(handler):
-                handler()
-
-    def _fade(self, widget: QWidget) -> None:
-        from PySide6.QtCore import QEasingCurve, QPropertyAnimation
-        from PySide6.QtWidgets import QGraphicsOpacityEffect
-
-        effect = QGraphicsOpacityEffect(widget)
-        widget.setGraphicsEffect(effect)
-        animation = QPropertyAnimation(effect, b"opacity", widget)
-        animation.setDuration(160)
-        animation.setStartValue(0.0)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-        animation.finished.connect(lambda: widget.setGraphicsEffect(None))
-        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+                if snapshot is not None:
+                    QTimer.singleShot(200, handler)
+                else:
+                    handler()
 
     def on_activate(self) -> None:
         page = self._pages.get(self._current)

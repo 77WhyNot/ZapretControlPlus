@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import threading
+
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -188,7 +189,16 @@ class DiagnosticsPage(Page):
         card.add(self.log_view)
 
         self.body.addWidget(card)
-        logs.subscribe(self._append_log_line)
+        # Строки журнала приходят из любых потоков (движок VPN, прокси
+        # Telegram, фоновые задачи), а трогать виджет можно только из потока
+        # окна. Поэтому копим их в очереди и выводим пачкой по таймеру — и
+        # только пока вкладка открыта; при открытии журнал перечитывается.
+        self._pending_log: list[str] = []
+        self._log_lock = threading.Lock()
+        self._log_timer = QTimer(self)
+        self._log_timer.setInterval(400)
+        self._log_timer.timeout.connect(self._flush_log)
+        logs.subscribe(self._queue_log_line)
         self._reload_log()
 
     # --- проверки --------------------------------------------------------
@@ -358,8 +368,30 @@ class DiagnosticsPage(Page):
             self.log_view.verticalScrollBar().maximum()
         )
 
-    def _append_log_line(self, line: str) -> None:
-        self.log_view.appendPlainText(line)
+    def _queue_log_line(self, line: str) -> None:
+        """Вызывается из любого потока — только кладёт строку в очередь."""
+        with self._log_lock:
+            self._pending_log.append(line)
+            # Закрытая вкладка при открытии перечитает журнал целиком —
+            # копить больше нескольких сотен строк незачем.
+            del self._pending_log[:-500]
+
+    def _flush_log(self) -> None:
+        with self._log_lock:
+            batch, self._pending_log = self._pending_log, []
+        if batch and self.isVisible():
+            self.log_view.appendPlainText("\n".join(batch))
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        with self._log_lock:
+            self._pending_log.clear()
+        self._reload_log()
+        self._log_timer.start()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self._log_timer.stop()
 
     def _clear_log(self) -> None:
         logs.clear()

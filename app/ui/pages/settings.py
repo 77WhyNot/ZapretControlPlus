@@ -198,7 +198,8 @@ class SettingsPage(Page):
 
     def _apply_theme_globally(self) -> None:
         window = self.window()
-        apply_theme = getattr(window, "apply_theme", None)
+        apply_theme = (getattr(window, "apply_theme_animated", None)
+                       or getattr(window, "apply_theme", None))
         if callable(apply_theme):
             apply_theme()
 

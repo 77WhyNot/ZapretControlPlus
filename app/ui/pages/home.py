@@ -220,6 +220,7 @@ class HomePage(Page):
         context.status_changed.connect(lambda _: self._refresh())
         context.tunnels_changed.connect(lambda _: self._refresh())
         context.foreign_vpn_changed.connect(lambda _: self._refresh())
+        context.dns_changed.connect(lambda _: self._refresh())
         context.tgws_changed.connect(lambda _: self._refresh())
         context.vpn_status_changed.connect(lambda _: self._refresh())
         context.servers_changed.connect(self._reload_servers)
@@ -423,7 +424,7 @@ class HomePage(Page):
         from app.core import dnsctl
 
         wanted = str(config.get("home_dns_preset", DNS_DEFAULT_PRESET))
-        current = dnsctl.current_preset()
+        current = self.context.dns_preset
         chosen = current if current != "auto" else wanted
         self.dns_box.blockSignals(True)
         self.dns_box.clear()
@@ -438,10 +439,11 @@ class HomePage(Page):
     # --- состояние -----------------------------------------------------------
 
     def on_activate(self) -> None:
-        self.context.refresh_status(force=True)
-        self.context.refresh_tunnels(force=True)
-        self.context.refresh_tgws(force=True)
-        self.context.refresh_vpn_status(force=True)
+        # Свежие данные — фоновым опросом: синхронный опрос здесь тормозил
+        # анимацию перехода на главную.
+        poll = getattr(self.window(), "_poll_state", None)
+        if callable(poll):
+            poll(force=True)
         self._reload_strategies()
         self._reload_dns()
         if not self._shown_once:
@@ -460,7 +462,9 @@ class HomePage(Page):
     def _dns_state(self) -> tuple[bool, str]:
         from app.core import dnsctl
 
-        preset = dnsctl.current_preset()
+        # Из последнего фонового опроса: реестр читать на каждое обновление
+        # экрана — лишние миллисекунды в потоке окна.
+        preset = self.context.dns_preset
         title = next((item.title for item in dnsctl.PRESETS if item.key == preset), "")
         return preset != "auto", title
 
@@ -611,6 +615,9 @@ class HomePage(Page):
             self._refresh()
 
     def _on_tick(self) -> None:
+        # Часы и «подключается…» нужны, только пока главная на экране.
+        if not self.isVisible() or self.window().isMinimized():
+            return
         self._sync_vpn_starting()
         self._refresh_uptime()
 
@@ -791,6 +798,7 @@ class HomePage(Page):
         def done(message: str, error: bool = False) -> None:
             self._busy_dns = False
             self.tile_dns.set_busy(False)
+            self.context.refresh_dns()
             self._refresh()
             (self.context.error if error else self.context.ok)(message)
 

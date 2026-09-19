@@ -156,8 +156,11 @@ class UpdatesPage(Page):
             return
 
         if info.notes:
-            self.core_notes.setMarkdown(info.notes)
-            self.core_notes.setVisible(True)
+            # Вёрстка описания релиза — сотни миллисекунд. При тихой проверке
+            # на старте её никто не видит, поэтому откладываем до открытия.
+            self._pending_notes = info.notes
+            if self.isVisible():
+                self._render_notes()
 
         if info.available:
             self.core_badge.update_state("есть обновление", "warn")
@@ -447,6 +450,18 @@ class UpdatesPage(Page):
             updater.mark_checked()
         if config.get("check_app_updates", True) and updater.running_from_installed_copy():
             self.check_app(manual=False)
+
+    def _render_notes(self) -> None:
+        notes = getattr(self, "_pending_notes", "")
+        if not notes:
+            return
+        self._pending_notes = ""
+        self.core_notes.setMarkdown(notes)
+        self.core_notes.setVisible(True)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._render_notes()
 
     def on_activate(self) -> None:
         self.core_current.set_value(updater.core_version())

@@ -6,55 +6,72 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+import time
+
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from app.ui.context import AppContext
+from app.ui.widgets import frame_clock
 
 DASH_PERIOD = 26.0
 TRACK_HEIGHT = 4
+FLOW_SPEED = 38.0  # пикселей в секунду — прежний темп, но без привязки к кадрам
 
 
 class LaneTrack(QWidget):
-    """Полоса пути. Когда активна — по ней движется пунктир."""
+    """Полоса пути. Когда активна — по ней движется пунктир.
+
+    Кадры приходят от общего таймера программы, а положение пунктира считается
+    по реальному времени: запоздавший кадр рисует верное место, а не «шаг
+    назад», поэтому движение ровное.
+    """
 
     def __init__(self, color: str, idle_color: str, active: bool = False,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, background: str = "#FFFFFF") -> None:
         super().__init__(parent)
         self.color = QColor(color)
         self.idle_color = QColor(idle_color)
-        self.active = active
-        self._phase = 0.0
+        self.background = QColor(background)
+        self.active = False
         self.setMinimumHeight(14)
         self.setMinimumWidth(80)
-
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._advance)
-        if active:
-            self._timer.start(40)
+        # Полоса сама закрашивает свой фон: иначе на каждом кадре Qt заново
+        # рисовал под ней фон карточки со стилем и скруглениями — это и
+        # съедало процессор, пока пунктир бежит.
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.set_active(active)
 
     def set_active(self, active: bool) -> None:
         if active == self.active:
             return
         self.active = active
         if active:
-            self._timer.start(40)
+            frame_clock().subscribe(self)
         else:
-            self._timer.stop()
+            frame_clock().unsubscribe(self)
         self.update()
 
-    def set_colors(self, color: str, idle_color: str) -> None:
+    def set_colors(self, color: str, idle_color: str, background: str = "") -> None:
         self.color = QColor(color)
         self.idle_color = QColor(idle_color)
+        if background:
+            self.background = QColor(background)
         self.update()
 
-    def _advance(self) -> None:
-        self._phase = (self._phase + 1.4) % DASH_PERIOD
-        self.update()
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self.active:
+            frame_clock().subscribe(self)
+
+    @property
+    def _phase(self) -> float:
+        return (time.perf_counter() * FLOW_SPEED) % DASH_PERIOD
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
+        painter.fillRect(self.rect(), self.background)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         middle = self.height() / 2
 
@@ -81,17 +98,37 @@ class LaneTrack(QWidget):
 
 
 class LaneChip(QLabel):
-    """Ярлык программы или сервиса на пути."""
+    """Ярлык программы или сервиса на пути.
+
+    Скруглённую плашку рисуем сами. Если задать её стилем (background +
+    border-radius), Qt считает ярлык непрозрачным целиком и не рисует фон под
+    его скруглёнными углами — отсюда были тёмные уголки и полоса между
+    соседними ярлыками.
+    """
 
     def __init__(self, text: str, parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._fill = QColor("#FFFFFF")
+        self._edge = QColor("#CDD4DE")
 
     def apply_colors(self, background: str, border: str, text: str) -> None:
+        self._fill = QColor(background)
+        self._edge = QColor(border)
         self.setStyleSheet(
-            f"background: {background}; border: 1px solid {border}; color: {text};"
-            "border-radius: 6px; padding: 3px 9px; font-size: 11.5px;"
+            f"background: transparent; border: none; color: {text};"
+            "padding: 3px 9px; font-size: 11.5px;"
         )
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(self._edge, 1))
+        painter.setBrush(self._fill)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
+        painter.end()
+        super().paintEvent(event)
 
 
 class LaneRow(QWidget):
@@ -119,14 +156,17 @@ class LaneRow(QWidget):
         layout.addWidget(self.label)
 
         self.track = LaneTrack(
-            context.color(color_token), context.color("border_strong")
+            context.color(color_token), context.color("border_strong"),
+            background=context.color("surface"),
         )
         layout.addWidget(self.track, 1)
 
-        self.chips_host = QWidget()
+        self.chips_host = QWidget(self)
         self.chips_layout = QHBoxLayout(self.chips_host)
         self.chips_layout.setContentsMargins(0, 0, 0, 0)
         self.chips_layout.setSpacing(5)
+        self._chips: list[LaneChip] = []
+        self._chip_texts: list[str] = []
         layout.addWidget(self.chips_host, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.apply_theme()
@@ -139,24 +179,39 @@ class LaneRow(QWidget):
         )
 
     def set_chips(self, items: list[str]) -> None:
-        while self.chips_layout.count():
-            item = self.chips_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        for text in items[:4]:
-            chip = LaneChip(text)
-            chip.apply_colors(
-                self.context.color("surface_alt"),
-                self.context.color("border_strong"),
-                self.context.color("text_dim"),
-            )
+        """Ярлыки переиспользуем: раньше их удаляли и создавали заново на
+        каждое обновление экрана, раз в пару секунд, — и в этот миг проступал
+        мусор под ними."""
+        items = list(items[:4])
+        if items == self._chip_texts:
+            return
+        self._chip_texts = items
+        while len(self._chips) < len(items):
+            chip = LaneChip("", self.chips_host)
+            self._paint_chip(chip)
             self.chips_layout.addWidget(chip)
+            self._chips.append(chip)
+        for index, chip in enumerate(self._chips):
+            if index < len(items):
+                chip.setText(items[index])
+                chip.show()
+            else:
+                chip.hide()
+
+    def _paint_chip(self, chip: LaneChip) -> None:
+        chip.apply_colors(
+            self.context.color("surface_alt"),
+            self.context.color("border_strong"),
+            self.context.color("text_dim"),
+        )
 
     def apply_theme(self) -> None:
         self.track.set_colors(
-            self.context.color(self.color_token), self.context.color("border_strong")
+            self.context.color(self.color_token), self.context.color("border_strong"),
+            self.context.color("surface"),
         )
+        for chip in self._chips:
+            self._paint_chip(chip)
         self.set_active(self.track.active)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802

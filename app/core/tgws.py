@@ -52,12 +52,31 @@ class _LogBridge(logging.Handler):
             "DC2:", "DC3:", "DC4:", "DC5:", "CF proxy", "CF worker",
             "Listening on", "Telegram MTProto WS Bridge Proxy")
 
+    # Сводка «stats:» приходит раз в минуту — в журнал хватит раза в 15 минут.
+    STATS_EVERY = 15 * 60
+    _last_stats = 0.0
+
+    # Обычная жизнь соединений Telegram: открылось, закрылось, резервный путь.
+    # На каждый чих — строка в журнале; оставляем только настоящие ошибки.
+    ROUTINE = ("session closed", "was timed out -> fallback", "pool refill",
+               "WS connect to", "-> fallback")
+
     def emit(self, record: logging.LogRecord) -> None:
+        import time
+
         try:
             text = record.getMessage()
         except Exception:  # noqa: BLE001
             return
         if any(marker in text for marker in self.SKIP):
+            return
+        if text.startswith("stats:"):
+            now = time.monotonic()
+            if now - _LogBridge._last_stats < self.STATS_EVERY:
+                return
+            _LogBridge._last_stats = now
+        elif record.levelno < logging.ERROR and any(
+                marker in text for marker in self.ROUTINE):
             return
         if record.levelno >= logging.ERROR:
             logs.error(f"TG WS: {text}")

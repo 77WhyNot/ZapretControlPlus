@@ -640,7 +640,12 @@ class VpnEngine:
             for raw in iter(stream.readline, b""):
                 line = winapi.decode_console(raw).rstrip()
                 if line:
-                    logs.write(line, "VPN")
+                    # Ошибки отдельных соединений («соединение закрыто»,
+                    # «таймаут до адреса») для туннеля обычное дело и шли
+                    # пачками по полсотни строк. В память — да, для разбора
+                    # причин падения, а в файл журнала — нет.
+                    if "] connection: " not in line:
+                        logs.write(line, "VPN")
                     self._last_output.append(line)
                     del self._last_output[:-40]
         except (OSError, ValueError):

@@ -18,6 +18,7 @@ class AppContext(QObject):
     strategies_changed = Signal()
     tunnels_changed = Signal(object)   # список чужих VPN-туннелей
     foreign_vpn_changed = Signal(object)  # туннели и клиенты-процессы чужих VPN
+    dns_changed = Signal(object)       # ключ текущего сервиса Smart DNS
     tgws_changed = Signal(object)      # состояние WebSocket-прокси Telegram
     vpn_status_changed = Signal(object)
     servers_changed = Signal()
@@ -34,6 +35,7 @@ class AppContext(QObject):
         self._status = engine.status()
         self._tunnels: list[str] = []
         self._foreign: list[str] = []
+        self._dns: str | None = None
         self._tgws = None
         self._tgws_key: tuple = ()
         self._vpn = None
@@ -89,6 +91,66 @@ class AppContext(QObject):
             self._tunnels = found
             self.tunnels_changed.emit(list(found))
         return list(found)
+
+    # --- снимок состояния из фонового опроса --------------------------------
+
+    def apply_snapshot(self, snapshot: dict, force: bool = False) -> None:
+        """Разложить готовый снимок по сигналам.
+
+        Всё медленное (службы, процессы, адаптеры, реестр DNS) собирается в
+        фоновом потоке, а здесь только сравнение и рассылка — окно не замирает.
+        """
+        status = snapshot.get("status")
+        if status is not None and (force or status != self._status):
+            self._status = status
+            self.status_changed.emit(status)
+
+        tgws = snapshot.get("tgws")
+        if tgws is not None:
+            key = (tgws.running, tgws.port, tgws.active, tgws.websocket,
+                   tgws.fallback, tgws.error)
+            self._tgws = tgws
+            if force or key != self._tgws_key:
+                self._tgws_key = key
+                self.tgws_changed.emit(tgws)
+
+        vpn = snapshot.get("vpn")
+        if vpn is not None and (force or vpn != self._vpn):
+            self._vpn = vpn
+            self.vpn_status_changed.emit(vpn)
+
+        dns = snapshot.get("dns")
+        if dns is not None and (force or dns != self._dns):
+            self._dns = dns
+            self.dns_changed.emit(dns)
+
+        foreign = snapshot.get("foreign")
+        if foreign is not None and (force or foreign != self._foreign):
+            self._foreign = list(foreign)
+            self.foreign_vpn_changed.emit(list(foreign))
+
+        tunnels = snapshot.get("tunnels")
+        if tunnels is not None and (force or tunnels != self._tunnels):
+            self._tunnels = list(tunnels)
+            self.tunnels_changed.emit(list(tunnels))
+
+    @property
+    def dns_preset(self) -> str:
+        """Текущий сервис Smart DNS — из последнего опроса, без похода в реестр."""
+        if self._dns is None:
+            from app.core import dnsctl
+
+            self._dns = dnsctl.current_preset()
+        return self._dns
+
+    def refresh_dns(self) -> str:
+        from app.core import dnsctl
+
+        value = dnsctl.current_preset()
+        if value != self._dns:
+            self._dns = value
+            self.dns_changed.emit(value)
+        return value
 
     @property
     def foreign_vpn(self) -> list[str]:
