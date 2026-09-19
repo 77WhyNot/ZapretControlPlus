@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QMessageBox, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QWidget
 
 from app.core import net, paths, winapi
 from app.core.config import config
@@ -20,6 +20,7 @@ from app.ui.widgets import (
     Spinner,
     Switch,
     Worker,
+    confirm,
     faint_label,
     section_label,
 )
@@ -428,15 +429,13 @@ class SettingsPage(Page):
         self.body.addWidget(card)
 
     def _reset(self) -> None:
-        answer = QMessageBox.question(
+        if not confirm(
             self,
             "Сброс настроек",
             "Вернуть все настройки программы к значениям по умолчанию?\n"
             "Списки доменов и ядро zapret не пострадают.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+            yes="Сбросить", no="Отмена", default_yes=False,
+        ):
             return
         config.reset()
         self._apply_theme_globally()

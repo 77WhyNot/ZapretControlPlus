@@ -80,6 +80,17 @@ class GooglePage(Page):
         self.ag_status = faint_label("")
         card.add(self.ag_status)
 
+        # Самый частый случай «User location is not supported».
+        self.ag_proxy_banner = Banner(
+            self.context, "warning",
+            "VPN сейчас работает как прокси. Antigravity, открытый обычным "
+            "ярлыком, пойдёт мимо VPN — Google увидит Россию. Запускайте его "
+            "кнопкой ниже или переключите VPN на «Туннель».",
+            kind="warn",
+        )
+        card.add(self.ag_proxy_banner)
+        self.ag_proxy_banner.setVisible(False)
+
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
         self.btn_launch = Button("Запустить через VPN", variant="primary",
@@ -117,7 +128,7 @@ class GooglePage(Page):
                 "Сначала включите VPN на вкладке «VPN» — иначе запускать "
                 "Antigravity через него не через что."
             )
-            self.context.navigate.emit("vpn")
+            self.context.navigate.emit("vpnconnect")
             return
         if not bool(config.get("google_launch_via_vpn", True)):
             proxy_url = None
@@ -161,7 +172,8 @@ class GooglePage(Page):
 
     def _diagnose(self) -> None:
         verdict = google.diagnose_log()
-        kinds = {"account": "warn", "network": "warn", "ok": "ok", "unknown": "info"}
+        kinds = {"account": "warn", "location": "warn", "network": "warn",
+                 "ok": "ok", "unknown": "info"}
         self.ag_verdict.set_kind(kinds.get(verdict.kind, "info"))
         self.ag_verdict.set_text(verdict.message)
         self.ag_verdict.setVisible(True)
@@ -173,6 +185,13 @@ class GooglePage(Page):
             self.account_more.set_expanded(True)
 
     def _sync_antigravity(self) -> None:
+        from app.core.vpn.engine import vpn_engine
+        from app.ui import vpn_actions
+
+        status = vpn_engine.status()
+        self.ag_proxy_banner.setVisible(
+            status.running and vpn_actions.transport() == vpn_config.TRANSPORT_PROXY
+        )
         app = google.find_app()
         if app is None:
             self.ag_badge.update_state("не найден", "neutral")
@@ -248,9 +267,16 @@ class GooglePage(Page):
         card.add_layout(header)
 
         card.add(faint_label(
-            "Программа спросит у самого Google, годится ли страна, из которой мы "
-            "выходим, и достучится ли она до серверов Gemini и Antigravity."
+            "Программа проверит все пути, которыми запросы уходят к Google: в "
+            "какой стране выходит VPN, какой выход движок на деле даёт запросам "
+            "к серверам Gemini и Antigravity и не утекает ли что-то по IPv6. "
+            "Протечь может любой — тогда Google отвечает «User location is not "
+            "supported»."
         ))
+
+        self.check_verdict = Banner(self.context, "info", "", kind="info")
+        card.add(self.check_verdict)
+        self.check_verdict.setVisible(False)
 
         self.check_host = QWidget()
         self.check_layout = QVBoxLayout(self.check_host)
@@ -264,6 +290,7 @@ class GooglePage(Page):
         if self._check_worker is not None and self._check_worker.busy():
             return
         from app.core.vpn.engine import vpn_engine
+        from app.ui import vpn_actions
 
         clear_layout(self.check_layout)
         self.btn_check.setEnabled(False)
@@ -271,7 +298,9 @@ class GooglePage(Page):
         worker = Worker(self)
         worker.finished.connect(self._check_ready)
         worker.failed.connect(self._check_failed)
-        worker.run(google.check, vpn_engine.proxy_url())
+        worker.run(google.check, vpn_engine.proxy_url(),
+                   vpn_engine.status().running, vpn_actions.transport(),
+                   bool(config.get("vpn_ipv6", False)))
         self._check_worker = worker
 
     def _check_failed(self, message: str) -> None:
@@ -284,26 +313,24 @@ class GooglePage(Page):
         self.check_spinner.stop()
         clear_layout(self.check_layout)
 
-        if result.exit_ip:
-            self.check_layout.addWidget(self._line(
-                True, f"Google видит нас как {result.exit_ip}",
-                result.exit_country or "",
-            ))
-        elif result.error:
-            self.check_layout.addWidget(self._line(False, result.error, ""))
-
         self.check_layout.addWidget(self._line(
-            result.location_ok, "Страна выхода", result.location_note,
+            result.country_ok is True,
+            f"Выход VPN{(': ' + result.exit_ip) if result.exit_ip else ''}",
+            result.country_note,
+        ))
+        self.check_layout.addWidget(self._line(
+            result.route_ok is True, "Маршрут к Google", result.route_note,
+        ))
+        self.check_layout.addWidget(self._line(
+            result.ipv6_ok is not False, "IPv6", result.ipv6_note,
         ))
         for title, ok, note in result.hosts:
             self.check_layout.addWidget(self._line(ok, title, note))
 
-        if result.location_ok:
-            self.context.ok(
-                "Сеть в порядке: Google принимает страну, из которой мы выходим."
-            )
-        else:
-            self.context.warn(result.location_note or "Google не принял страну.")
+        self.check_verdict.set_kind("ok" if result.verdict_ok else "warn")
+        self.check_verdict.set_text(result.verdict)
+        self.check_verdict.setVisible(True)
+        (self.context.ok if result.verdict_ok else self.context.warn)(result.verdict)
 
     def _line(self, ok: bool, title: str, note: str) -> QWidget:
         row = QWidget(self.check_host)

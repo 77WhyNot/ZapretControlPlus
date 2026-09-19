@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QMessageBox, QProgressBar, QTextBrowser
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QProgressBar, QTextBrowser
 
 from app.core import net, updater
 from app.core.config import config
-from app.core.constants import APP_REPO, APP_VERSION, UPSTREAM_HOME, UPSTREAM_REPO
+from app.core.constants import APP_NAME, APP_REPO, APP_VERSION, UPSTREAM_HOME, UPSTREAM_REPO
 from app.ui.context import AppContext
 from app.ui.pages.base import Page
 from app.ui.widgets import (
@@ -21,6 +21,7 @@ from app.ui.widgets import (
     StatItem,
     Switch,
     Worker,
+    confirm,
     faint_label,
     section_label,
 )
@@ -239,7 +240,7 @@ class UpdatesPage(Page):
         header.setSpacing(10)
         self.app_icon = IconLabel("download", self.context.color("accent"), 20)
         header.addWidget(self.app_icon)
-        header.addWidget(section_label("Приложение Zapret Control"))
+        header.addWidget(section_label(f"Приложение {APP_NAME}"))
         header.addStretch(1)
         self.app_badge = Badge("не проверялось", "neutral")
         header.addWidget(self.app_badge)
@@ -334,16 +335,14 @@ class UpdatesPage(Page):
         info = self._app_info
         if info is None or not info.available:
             return
-        answer = QMessageBox.question(
+        if not confirm(
             self,
             "Обновление программы",
             f"Скачать и установить версию {info.latest}?\n\n"
             "Программа закроется, установщик отработает сам и запустит "
-            "новую версию.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+            "новую версию. VPN на несколько секунд прервётся.",
+            yes="Обновить", no="Позже",
+        ):
             return
 
         self.btn_app_install.setEnabled(False)

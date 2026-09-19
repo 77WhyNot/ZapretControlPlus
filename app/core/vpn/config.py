@@ -206,7 +206,11 @@ def build_config(
             ],
             "rules": dns_rules,
             "final": dns_final,
-            "strategy": "prefer_ipv4" if not ipv6 else "prefer_ipv6",
+            # Туннель без IPv6 не должен раздавать IPv6-адреса: иначе на
+            # машине с IPv6 от провайдера программы (тот же языковой сервер
+            # Antigravity — он предпочитает IPv6) уходят мимо туннеля, и
+            # Google видит российский адрес: «User location is not supported».
+            "strategy": "ipv4_only" if not ipv6 else "prefer_ipv6",
             "independent_cache": True,
         },
         "inbounds": ([

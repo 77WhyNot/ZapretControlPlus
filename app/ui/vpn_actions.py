@@ -47,7 +47,7 @@ def start(parent: QObject, context: AppContext,
     settings = _settings(context)
     if not settings["servers"]:
         context.error("Сначала добавьте подписку на вкладке «VPN».")
-        context.navigate.emit("vpn")
+        context.navigate.emit("vpnconnect")
         if on_done:
             on_done(False)
         return None

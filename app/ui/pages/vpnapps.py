@@ -188,7 +188,7 @@ class VpnAppsPage(Page):
             "распределять по программам, переключитесь на «Туннель» на вкладке VPN.",
             kind="info", action_text="Открыть VPN",
         )
-        self.banner_proxy.action.clicked.connect(lambda: self.context.navigate.emit("vpn"))
+        self.banner_proxy.action.clicked.connect(lambda: self.context.navigate.emit("vpnconnect"))
         card.add(self.banner_proxy)
         self.banner_proxy.setVisible(False)
 

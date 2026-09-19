@@ -255,10 +255,7 @@ class VpnPage(Page):
             row.addWidget(button)
             self._transport_buttons[key] = button
         row.addStretch(1)
-        self.btn_apps = Button("Программы", variant="ghost", icon_name="list",
-                               icon_color=self.context.color("text_dim"))
-        self.btn_apps.clicked.connect(lambda: self.context.navigate.emit("vpnapps"))
-        row.addWidget(self.btn_apps)
+        # Список программ — соседняя вкладка «Программы» этого же раздела.
         card.add_layout(row)
 
         self.transport_hint = faint_label("")
@@ -313,7 +310,6 @@ class VpnPage(Page):
                 "с любым другим VPN. Через VPN пойдут браузеры, Discord и всё, "
                 "что уважает системный прокси. Выбор программ здесь не действует."
             )
-        self.btn_apps.setVisible(current == vpn_config.TRANSPORT_TUN)
 
     def _toggle_vpn(self, value: bool) -> None:
         if self._busy:
@@ -712,7 +708,6 @@ class VpnPage(Page):
         self.sub_spinner.set_color(accent)
         self.board_spinner.set_color(accent)
         self.shop_icon.set_color(accent)
-        self.btn_apps.set_icon("list", self.context.color("text_dim"))
         for row in self._rows:
             row.apply_theme()
         self._sync_transport()

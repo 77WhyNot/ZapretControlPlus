@@ -38,6 +38,7 @@ from app.core.engine import MODE_SERVICE, engine
 from app.ui import icons
 from app.ui.context import AppContext
 from app.ui.pages.about import AboutPage
+from app.ui.pages.base import TabbedPage
 from app.ui.pages.diagnostics import DiagnosticsPage
 from app.ui.pages.dns import DnsPage
 from app.ui.pages.google import GooglePage
@@ -50,7 +51,7 @@ from app.ui.pages.servers import VpnPage
 from app.ui.pages.telegram import TelegramPage
 from app.ui.pages.vpnapps import VpnAppsPage
 from app.ui.pages.updates import UpdatesPage
-from app.ui.widgets import IconLabel, Toast
+from app.ui.widgets import IconLabel, Toast, confirm
 
 # --- нативные константы --------------------------------------------------
 
@@ -85,11 +86,11 @@ class MONITORINFO(ctypes.Structure):
 # В боковом меню видны только те разделы, куда заходят регулярно.
 # Остальные никуда не делись — они за кнопкой «Ещё».
 PRIMARY_PAGES = (
-    ("home", "Обзор", "home"),
+    ("home", "Главная", "home"),
+    ("strategies", "Запрет", "shield_check"),
     ("vpn", "VPN", "layers"),
     ("telegram", "Telegram", "telegram"),
     ("google", "Google", "sparkles"),
-    ("strategies", "Стратегии", "route"),
     ("dns", "Smart DNS", "globe"),
     ("diagnostics", "Диагностика", "activity"),
     ("settings", "Настройки", "settings"),
@@ -97,13 +98,38 @@ PRIMARY_PAGES = (
 
 MORE_PAGES = (
     ("speed", "Скорость интернета", "bolt"),
-    ("vpnapps", "Программы VPN", "list"),
     ("lists", "Списки сайтов", "list"),
-    ("updates", "Обновления", "cloud_download"),
     ("about", "О программе", "info"),
 )
 
 PAGES = PRIMARY_PAGES + MORE_PAGES
+
+# Бывшие отдельные разделы, ставшие вкладками внутри других. Старые ключи
+# продолжают работать: кнопки и уведомления ведут прямо на нужную вкладку.
+ALIASES = {
+    "vpnconnect": ("vpn", "connect"),
+    "vpnapps": ("vpn", "apps"),
+    "updates": ("settings", "updates"),
+}
+
+
+def _vpn_section(context, parent):
+    return TabbedPage(
+        context, "VPN",
+        "Ваша подписка: туннель для выбранных программ или прокси без "
+        "конфликтов с другим VPN.",
+        [("connect", "Подключение", VpnPage), ("apps", "Программы", VpnAppsPage)],
+        parent,
+    )
+
+
+def _settings_section(context, parent):
+    return TabbedPage(
+        context, "Настройки",
+        "Внешний вид, поведение, сеть и обновления.",
+        [("main", "Основное", SettingsPage), ("updates", "Обновления", UpdatesPage)],
+        parent,
+    )
 
 
 class TitleBar(QWidget):
@@ -317,8 +343,7 @@ class MainWindow(QWidget):
         # долго, и окно успевало показаться недостроенным.
         self._factories = {
             "home": HomePage,
-            "vpn": VpnPage,
-            "vpnapps": VpnAppsPage,
+            "vpn": _vpn_section,
             "telegram": TelegramPage,
             "google": GooglePage,
             "dns": DnsPage,
@@ -326,8 +351,7 @@ class MainWindow(QWidget):
             "lists": ListsPage,
             "speed": SpeedPage,
             "diagnostics": DiagnosticsPage,
-            "updates": UpdatesPage,
-            "settings": SettingsPage,
+            "settings": _settings_section,
             "about": AboutPage,
         }
         for key, title, icon_name in PRIMARY_PAGES:
@@ -339,7 +363,7 @@ class MainWindow(QWidget):
 
         sidebar_layout.addStretch(1)
 
-        self.more_button = NavButton("__more__", "Ещё", "settings",
+        self.more_button = NavButton("__more__", "Ещё", "list",
                                      self.context, self.sidebar)
         self.more_button.setCheckable(False)
         self.more_button.clicked.connect(self._show_more_menu)
@@ -440,6 +464,11 @@ class MainWindow(QWidget):
         Родителем сразу назначаем контейнер страниц: виджет без родителя Qt
         считает окном и успевает мигнуть им на экране при первом открытии.
         """
+        if key in ALIASES:
+            parent_key, tab = ALIASES[key]
+            section = self.ensure_page(parent_key)
+            finder = getattr(section, "tab_widget", None)
+            return finder(tab) if callable(finder) else section
         widget = self.page_widgets.get(key)
         if widget is not None:
             return widget
@@ -460,6 +489,14 @@ class MainWindow(QWidget):
             self.ensure_page(key)
 
     def show_page(self, key: str) -> None:
+        if key in ALIASES:
+            parent_key, tab = ALIASES[key]
+            self.show_page(parent_key)
+            section = self.page_widgets.get(parent_key)
+            select = getattr(section, "select_tab", None)
+            if callable(select):
+                select(tab)
+            return
         widget = self.ensure_page(key)
         if widget is None:
             return
@@ -842,16 +879,14 @@ class MainWindow(QWidget):
             and not keep_running
             and config.get("confirm_exit_while_running", True)
         ):
-            answer = QMessageBox.question(
+            if not confirm(
                 self,
                 "Выход",
                 "Обход работает в режиме процесса и остановится вместе с программой.\n\n"
                 "Чтобы обход работал всегда, переключитесь на режим службы "
-                "на вкладке «Стратегии».\n\nВыйти?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
+                "на вкладке «Запрет».\n\nВыйти?",
+                yes="Выйти", no="Остаться", default_yes=False,
+            ):
                 return
 
         self._force_quit = True

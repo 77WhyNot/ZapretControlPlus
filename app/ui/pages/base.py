@@ -7,7 +7,9 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +33,8 @@ class Page(QWidget):
         outer.setSpacing(0)
 
         header = QWidget()
+        # Заголовок прячет TabbedPage: у вкладки раздела он общий, сверху.
+        self.header = header
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(28, 24, 28, 12)
         header_layout.setSpacing(4)
@@ -85,12 +89,123 @@ class Page(QWidget):
         self.body.addStretch(1)
 
 
+class TabbedPage(QWidget):
+    """Раздел с вкладками: «VPN → Подключение | Программы» и подобные.
+
+    Вкладки — обычные страницы, только без собственного заголовка: он у
+    раздела один, а под ним — переключатель. Смена вкладки мягко проявляется.
+    """
+
+    def __init__(self, context: AppContext, title: str, subtitle: str,
+                 tabs: list[tuple[str, str, type]],
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.context = context
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        header = QWidget(self)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(28, 24, 28, 6)
+        header_layout.setSpacing(4)
+        self.title_label = QLabel(title, header)
+        self.title_label.setObjectName("PageTitle")
+        header_layout.addWidget(self.title_label)
+        self.subtitle_label = QLabel(subtitle, header)
+        self.subtitle_label.setObjectName("PageSubtitle")
+        self.subtitle_label.setWordWrap(True)
+        header_layout.addWidget(self.subtitle_label)
+        self.subtitle_label.setVisible(bool(subtitle))
+
+        bar = QFrame(header)
+        bar.setObjectName("SegmentBar")
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(4, 4, 4, 4)
+        bar_layout.setSpacing(4)
+        self._buttons: dict[str, QPushButton] = {}
+        self.stack = QStackedWidget(self)
+        self._pages: dict[str, QWidget] = {}
+        self._order: list[str] = []
+        for key, label, factory in tabs:
+            button = QPushButton(label, bar)
+            button.setObjectName("SegmentButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _=False, k=key: self.select_tab(k))
+            bar_layout.addWidget(button)
+            self._buttons[key] = button
+
+            page = factory(context, self.stack)
+            header_widget = getattr(page, "header", None)
+            if header_widget is not None:
+                header_widget.hide()
+            self.stack.addWidget(page)
+            self._pages[key] = page
+            self._order.append(key)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 8, 0, 0)
+        row.addWidget(bar)
+        row.addStretch(1)
+        header_layout.addLayout(row)
+
+        outer.addWidget(header)
+        outer.addWidget(self.stack, 1)
+        self._current = ""
+        if self._order:
+            self.select_tab(self._order[0], activate=False)
+
+    def tab_widget(self, key: str) -> QWidget | None:
+        return self._pages.get(key)
+
+    def current_key(self) -> str:
+        return self._current
+
+    def select_tab(self, key: str, activate: bool = True) -> None:
+        page = self._pages.get(key)
+        if page is None:
+            return
+        changed = key != self._current
+        self._current = key
+        for name, button in self._buttons.items():
+            button.setChecked(name == key)
+        self.stack.setCurrentWidget(page)
+        if changed and activate:
+            self._fade(page)
+        if activate:
+            handler = getattr(page, "on_activate", None)
+            if callable(handler):
+                handler()
+
+    def _fade(self, widget: QWidget) -> None:
+        from PySide6.QtCore import QEasingCurve, QPropertyAnimation
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b"opacity", widget)
+        animation.setDuration(160)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.finished.connect(lambda: widget.setGraphicsEffect(None))
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def on_activate(self) -> None:
+        page = self._pages.get(self._current)
+        handler = getattr(page, "on_activate", None)
+        if callable(handler):
+            handler()
+
+
 class Banner(QFrame):
     """Заметная плашка-предупреждение с необязательной кнопкой."""
 
     def __init__(self, context: AppContext, icon_name: str, text: str,
                  kind: str = "warn", action_text: str = "",
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, compact: bool = False) -> None:
         super().__init__(parent)
         self.context = context
         self.kind = kind
@@ -98,14 +213,23 @@ class Banner(QFrame):
         self.setObjectName("CardAlt")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 13, 16, 13)
-        layout.setSpacing(12)
+        # Компактная — для постоянных подсказок вроде «обнаружен другой VPN»:
+        # она должна быть видна, но не спорить за внимание с главным.
+        if compact:
+            layout.setContentsMargins(12, 7, 10, 7)
+            layout.setSpacing(9)
+        else:
+            layout.setContentsMargins(16, 13, 16, 13)
+            layout.setSpacing(12)
 
-        self.icon = IconLabel(icon_name, self._color(), 20, self)
-        layout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignTop)
+        self.icon = IconLabel(icon_name, self._color(), 16 if compact else 20, self)
+        layout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignVCenter if compact
+                         else Qt.AlignmentFlag.AlignTop)
 
         self.label = QLabel(text)
         self.label.setWordWrap(True)
+        if compact:
+            self.label.setStyleSheet("font-size: 12.5px; background: transparent;")
         layout.addWidget(self.label, 1)
 
         # Сначала родитель и компоновка, только потом видимость: setVisible

@@ -75,6 +75,7 @@ DEFAULTS: dict[str, Any] = {
     "google_route_vpn": True,       # домены Google всегда через VPN
     "google_launch_via_vpn": True,  # Antigravity запускать с нашим прокси
     # Прочее
+    "home_dns_preset": "xbox",      # сервис Smart DNS для тумблера на главной
     "speedtest_last": {},           # последний замер скорости, чтобы не пустовало
     "first_run": True,
     "window_geometry": "",

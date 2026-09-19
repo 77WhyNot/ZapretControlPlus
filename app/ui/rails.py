@@ -108,7 +108,7 @@ class LaneRow(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 7, 0, 7)
+        layout.setContentsMargins(0, 4, 0, 4)
         layout.setSpacing(12)
 
         self.label = QLabel(title.upper())
@@ -198,7 +198,6 @@ class RailsBoard(QWidget):
             ("tg", "Telegram", "lane_tg"),
             ("dns", "Smart DNS", "lane_dns"),
             ("vpn", "VPN", "lane_vpn"),
-            ("foreign", "Чужой VPN", "lane_foreign"),
         ):
             lane = LaneRow(context, key, title, token)
             lane.clicked.connect(self.lane_clicked.emit)
@@ -222,9 +221,7 @@ class RailsBoard(QWidget):
         self.lanes["dns"].set_chips([dns_note] if dns_on and dns_note else [])
         self.lanes["vpn"].set_active(vpn_on)
         self.lanes["vpn"].set_chips(list(vpn_chips or []) if vpn_on else [])
-        # Чужой туннель мы не включаем и не выключаем — только показываем.
-        self.lanes["foreign"].set_active(bool(tunnels))
-        self.lanes["foreign"].set_chips(tunnels)
+        # Чужой VPN на схеме не рисуем: о нём говорит небольшая плашка над ней.
 
     def apply_theme(self) -> None:
         faint = self.context.color("text_faint")

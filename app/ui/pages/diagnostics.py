@@ -259,37 +259,8 @@ class DiagnosticsPage(Page):
         header.addWidget(self.tools_spinner)
         card.add_layout(header)
 
-        card.add(faint_label(
-            "Discord держит адреса голосовых серверов в кэше и после смены "
-            "стратегии продолжает стучаться по старым. Перезапуск с очисткой "
-            "чаще всего и чинит неработающий голос."
-        ))
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self.btn_discord_restart = Button("Перезапустить Discord", variant="soft")
-        self.btn_discord_restart.clicked.connect(
-            lambda: self._run_tool(diag.restart_discord_clean,
-                                   self.btn_discord_restart)
-        )
-        row.addWidget(self.btn_discord_restart)
-
-        self.btn_discord_cache = Button("Только очистить кэш")
-        self.btn_discord_cache.clicked.connect(
-            lambda: self._run_tool(diag.clear_discord_cache, self.btn_discord_cache)
-        )
-        row.addWidget(self.btn_discord_cache)
-
-        self.btn_discord_start = Button("Запустить Discord", variant="ghost")
-        self.btn_discord_start.clicked.connect(
-            lambda: self._run_tool(diag.launch_discord, self.btn_discord_start)
-        )
-        row.addWidget(self.btn_discord_start)
-        row.addStretch(1)
-        card.add_layout(row)
-
-        card.add(Divider())
-
+        # Перезапуск и очистка Discord переехали на вкладку «Запрет»: им
+        # пользуются сразу после смены стратегии, а не при поиске поломок.
         self.clients_label = faint_label("")
         card.add(self.clients_label)
 

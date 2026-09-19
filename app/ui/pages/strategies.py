@@ -28,9 +28,10 @@ from app.ui.widgets import (
     Badge,
     Button,
     Card,
+    Collapsible,
     Divider,
     IconLabel,
-        Spinner,
+    Spinner,
     Worker,
     faint_label,
     section_label,
@@ -160,22 +161,161 @@ class StrategiesPage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "Стратегии",
-            "Стратегия — это набор приёмов обмана DPI. У разных провайдеров "
-            "работают разные варианты, поэтому их и много.",
+            "Запрет",
+            "Обход блокировок DPI. Стратегия — набор приёмов обмана провайдера: "
+            "у разных провайдеров работают разные, поэтому их много.",
             parent,
         )
         self._rows: list[StrategyRow] = []
         self._rows_signature: tuple = ()
         self._tester: autotest.AutoTester | None = None
         self._auto_worker: Worker | None = None
+        self._busy = False
 
+        self._build_current()
         self._build_autopick()
-        self._build_game_filter()
+        self._build_filters()
+        self._build_discord()
         self._build_list()
 
         context.status_changed.connect(lambda _: self._mark_running())
+        context.strategies_changed.connect(self._reload_current)
         self.apply_theme()
+
+    # --- текущая стратегия ------------------------------------------------
+
+    def _build_current(self) -> None:
+        card = Card(padding=20, spacing=13)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        self.current_icon = IconLabel("shield_check", self.context.color("accent"), 20)
+        header.addWidget(self.current_icon)
+        header.addWidget(section_label("Стратегия"))
+        header.addStretch(1)
+        self.current_spinner = Spinner(16, self.context.color("accent"))
+        header.addWidget(self.current_spinner)
+        self.current_badge = Badge("выключен", "neutral")
+        header.addWidget(self.current_badge)
+        card.add_layout(header)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.current_box = QComboBox()
+        self.current_box.setMinimumWidth(260)
+        row.addWidget(self.current_box, 1)
+        self.btn_current_args = Button("Аргументы", variant="ghost")
+        self.btn_current_args.clicked.connect(self._show_current_args)
+        row.addWidget(self.btn_current_args)
+        self.btn_current_run = Button("Запустить", variant="primary")
+        self.btn_current_run.clicked.connect(self._apply_current)
+        row.addWidget(self.btn_current_run)
+        self.btn_current_stop = Button("Остановить", variant="soft")
+        self.btn_current_stop.clicked.connect(self._stop_current)
+        row.addWidget(self.btn_current_stop)
+        card.add_layout(row)
+
+        self.current_hint = faint_label("")
+        card.add(self.current_hint)
+        card.add(Divider())
+
+        from app.ui.widgets import SettingRow
+
+        self.mode_box = QComboBox()
+        self.mode_box.addItem("Служба Windows — работает всегда", MODE_SERVICE)
+        self.mode_box.addItem("Процесс — пока открыта программа", MODE_PROCESS)
+        self.mode_box.currentIndexChanged.connect(self._mode_changed)
+        card.add(SettingRow(
+            "Режим работы",
+            "Служба продолжает обход и после закрытия программы, и после "
+            "перезагрузки. Процесс живёт, только пока открыта программа.",
+            self.mode_box,
+        ))
+
+        self.body.addWidget(card)
+        self._reload_current()
+
+    def _reload_current(self) -> None:
+        items = self.context.load_strategies()
+        current = self.context.current_strategy()
+        self.current_box.blockSignals(True)
+        self.current_box.clear()
+        for item in items:
+            label = item.title + (f" — {item.badge}" if item.badge else "")
+            self.current_box.addItem(label, item.id)
+        if current is not None:
+            index = self.current_box.findData(current.id)
+            if index >= 0:
+                self.current_box.setCurrentIndex(index)
+        self.current_box.blockSignals(False)
+
+        self.mode_box.blockSignals(True)
+        index = self.mode_box.findData(str(config.get("run_mode", MODE_SERVICE)))
+        if index >= 0:
+            self.mode_box.setCurrentIndex(index)
+        self.mode_box.blockSignals(False)
+        self._sync_current()
+
+    def _selected_strategy(self) -> Strategy | None:
+        wanted = str(self.current_box.currentData() or "")
+        return next((item for item in self.context.load_strategies()
+                     if item.id == wanted), None)
+
+    def _sync_current(self) -> None:
+        status = self.context.status
+        running = status.running
+        self.current_badge.update_state(
+            f"работает · {status.mode_label}" if running else "выключен",
+            "ok" if running else "neutral",
+        )
+        self.btn_current_run.setText("Перезапустить" if running else "Запустить")
+        self.btn_current_stop.setEnabled(running and not self._busy)
+        self.btn_current_run.setEnabled(not self._busy)
+        active = next((item for item in self.context.load_strategies()
+                       if item.id == status.strategy_id), None)
+        self.current_hint.setText(
+            f"Сейчас работает «{active.title}»." if running and active else
+            "Выберите стратегию и нажмите «Запустить». Не знаете какую — "
+            "нажмите «Подобрать» ниже, программа проверит их сама."
+        )
+
+    def _apply_current(self) -> None:
+        strategy = self._selected_strategy()
+        if strategy is None:
+            self.context.error("Стратегия не найдена.")
+            return
+        self.run_strategy(strategy)
+
+    def _stop_current(self) -> None:
+        self._busy = True
+        self.current_spinner.start()
+        self._sync_current()
+        worker = Worker(self)
+        worker.finished.connect(lambda _: self._current_done("Обход выключен"))
+        worker.failed.connect(lambda message: self._current_done(message, error=True))
+        worker.run(engine.stop)
+        self._stop_worker = worker
+
+    def _current_done(self, message: str, error: bool = False) -> None:
+        self._busy = False
+        self.current_spinner.stop()
+        self.context.refresh_status(force=True)
+        self._sync_current()
+        (self.context.error if error else self.context.ok)(message)
+
+    def _show_current_args(self) -> None:
+        strategy = self._selected_strategy()
+        if strategy is not None:
+            ArgumentsDialog(self.context, strategy, self).exec()
+
+    def _mode_changed(self) -> None:
+        mode = str(self.mode_box.currentData())
+        config.set("run_mode", mode)
+        label = "служба Windows" if mode == MODE_SERVICE else "процесс"
+        if self.context.status.running:
+            self.context.warn(f"Режим: {label}. Нажмите «Перезапустить», чтобы применить.")
+        else:
+            self.context.ok(f"Режим работы: {label}")
 
     # --- автоподбор ------------------------------------------------------
 
@@ -375,15 +515,15 @@ class StrategiesPage(Page):
             layout.addWidget(apply_button)
         return line
 
-    # --- игровой фильтр --------------------------------------------------
+    # --- фильтры ---------------------------------------------------------
 
-    def _build_game_filter(self) -> None:
+    def _build_filters(self) -> None:
+        from app.core import lists as lists_module
+        from app.ui.widgets import SettingRow
+
         card = Card(padding=20, spacing=12)
+        card.add(section_label("Фильтры"))
 
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        header.addWidget(section_label("Игровой фильтр"))
-        header.addStretch(1)
         self.game_box = QComboBox()
         for key, label in GAME_FILTER_LABELS.items():
             self.game_box.addItem(label.capitalize(), key)
@@ -391,15 +531,146 @@ class StrategiesPage(Page):
         if index >= 0:
             self.game_box.setCurrentIndex(index)
         self.game_box.currentIndexChanged.connect(self._change_game_filter)
-        header.addWidget(self.game_box)
+        card.add(SettingRow(
+            "Игровой фильтр",
+            "Расширяет обход на порты 1024–65535, чтобы работали игры и голосовые "
+            "сервисы. Нагрузка растёт, часть программ может сбоить — включайте, "
+            "только если без него игры не работают.",
+            self.game_box,
+        ))
+        card.add(Divider())
+
+        self.ipset_box = QComboBox()
+        for key, label in lists_module.IPSET_MODES.items():
+            self.ipset_box.addItem(label, key)
+        self.ipset_box.currentIndexChanged.connect(self._change_ipset)
+        card.add(SettingRow(
+            "Фильтр по IP (IPSet)",
+            "Список подсетей заблокированных сервисов — нужен там, где домен "
+            "определить нельзя, например для голосовых серверов Discord.",
+            self.ipset_box,
+        ))
+        card.add(Divider())
+
+        restart_row = QHBoxLayout()
+        restart_row.setSpacing(10)
+        self.filters_hint = faint_label("", wrap=False)
+        restart_row.addWidget(self.filters_hint)
+        restart_row.addStretch(1)
+        self.btn_restart = Button("Перезапустить обход", variant="ghost")
+        self.btn_restart.clicked.connect(self._restart_bypass)
+        restart_row.addWidget(self.btn_restart)
+        card.add_layout(restart_row)
+
+        self.body.addWidget(card)
+        self._sync_filters()
+
+    def _sync_filters(self) -> None:
+        from app.core import lists as lists_module
+
+        self.game_box.blockSignals(True)
+        index = self.game_box.findData(self.context.current_game_filter())
+        if index >= 0:
+            self.game_box.setCurrentIndex(index)
+        self.game_box.blockSignals(False)
+
+        self.ipset_box.blockSignals(True)
+        index = self.ipset_box.findData(lists_module.ipset_mode())
+        if index >= 0:
+            self.ipset_box.setCurrentIndex(index)
+        self.ipset_box.blockSignals(False)
+
+        size = lists_module.ipset_size()
+        self.filters_hint.setText(
+            (f"{size} подсетей в списке · " if size else "")
+            + "фильтры применяются после перезапуска обхода"
+        )
+
+    def _change_ipset(self) -> None:
+        from app.core import lists as lists_module
+
+        mode = str(self.ipset_box.currentData())
+        try:
+            lists_module.set_ipset_mode(mode)
+        except (RuntimeError, OSError) as exc:
+            self.context.error(str(exc))
+            self._sync_filters()
+            return
+        self._sync_filters()
+        if self.context.status.running:
+            self.context.warn(
+                f"Фильтр IP: {lists_module.IPSET_MODES[mode]}. "
+                "Перезапустите обход, чтобы применить."
+            )
+        else:
+            self.context.ok(f"Фильтр IP: {lists_module.IPSET_MODES[mode]}")
+
+    def _restart_bypass(self) -> None:
+        status = self.context.status
+        if not status.running:
+            self.context.warn("Обход не запущен — нечего перезапускать.")
+            return
+        strategy = self.context.current_strategy()
+        if strategy is not None:
+            self.run_strategy(strategy)
+
+    # --- Discord ---------------------------------------------------------
+
+    def _build_discord(self) -> None:
+        card = Card(padding=20, spacing=12)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        header.addWidget(section_label("Discord"))
+        header.addStretch(1)
+        self.discord_spinner = Spinner(16, self.context.color("accent"))
+        header.addWidget(self.discord_spinner)
         card.add_layout(header)
 
         card.add(faint_label(
-            "Расширяет обход на порты 1024–65535, чтобы работали игры и голосовые "
-            "сервисы. Обратная сторона: нагрузка растёт, а часть программ может "
-            "начать сбоить. Включайте, только если без него игры не работают."
+            "Discord держит адреса голосовых серверов в кэше и после смены "
+            "стратегии продолжает стучаться по старым. Перезапуск с очисткой кэша "
+            "чаще всего и чинит неработающий голос."
         ))
+
+        from app.core import diagnostics as diag
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.btn_discord_restart = Button("Перезапустить Discord", variant="soft")
+        self.btn_discord_restart.clicked.connect(
+            lambda: self._run_discord(diag.restart_discord_clean, self.btn_discord_restart)
+        )
+        row.addWidget(self.btn_discord_restart)
+        self.btn_discord_cache = Button("Очистить кэш Discord", variant="ghost")
+        self.btn_discord_cache.clicked.connect(
+            lambda: self._run_discord(diag.clear_discord_cache, self.btn_discord_cache)
+        )
+        row.addWidget(self.btn_discord_cache)
+        self.btn_discord_start = Button("Запустить Discord", variant="ghost")
+        self.btn_discord_start.clicked.connect(
+            lambda: self._run_discord(diag.launch_discord, self.btn_discord_start)
+        )
+        row.addWidget(self.btn_discord_start)
+        row.addStretch(1)
+        card.add_layout(row)
+
         self.body.addWidget(card)
+
+    def _run_discord(self, function, button) -> None:
+        button.setEnabled(False)
+        self.discord_spinner.start()
+
+        def done(message: str, error: bool = False) -> None:
+            button.setEnabled(True)
+            self.discord_spinner.stop()
+            (self.context.error if error else self.context.ok)(message)
+
+        worker = Worker(self)
+        worker.finished.connect(lambda result: done(str(result)))
+        worker.failed.connect(lambda message: done(message, True))
+        worker.run(function)
+        self._discord_worker = worker
 
     def _change_game_filter(self) -> None:
         mode = str(self.game_box.currentData())
@@ -418,11 +689,15 @@ class StrategiesPage(Page):
     # --- список ----------------------------------------------------------
 
     def _build_list(self) -> None:
+        # Двадцать с лишним строк нужны редко — они свёрнуты, а обычная
+        # смена стратегии идёт из списка вверху страницы.
+        self.list_more = Collapsible("Все стратегии", self.context)
+        self.list_more.set_hint("описания, аргументы, запуск любой")
+
         card = Card(padding=20, spacing=12)
 
         header = QHBoxLayout()
         header.setSpacing(10)
-        header.addWidget(section_label("Все стратегии"))
         header.addStretch(1)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Поиск по названию…")
@@ -437,7 +712,8 @@ class StrategiesPage(Page):
         self.list_layout.setSpacing(0)
         card.add(self.list_container)
 
-        self.body.addWidget(card)
+        self.list_more.body.addWidget(card)
+        self.body.addWidget(self.list_more)
         self._reload_rows()
 
     def _reload_rows(self, force: bool = False) -> None:
@@ -476,6 +752,8 @@ class StrategiesPage(Page):
         active = status.strategy_id if status.running else ""
         for row in self._rows:
             row.set_running(bool(active) and row.strategy.id == active)
+        if hasattr(self, "current_badge"):
+            self._sync_current()
 
     # --- запуск ----------------------------------------------------------
 
@@ -483,6 +761,12 @@ class StrategiesPage(Page):
         config.set("last_strategy", strategy.id)
         mode = str(config.get("run_mode", MODE_SERVICE))
 
+        self._busy = True
+        self.current_spinner.start()
+        index = self.current_box.findData(strategy.id)
+        if index >= 0:
+            self.current_box.setCurrentIndex(index)
+        self._sync_current()
         for row in self._rows:
             row.btn_run.setEnabled(False)
 
@@ -493,25 +777,38 @@ class StrategiesPage(Page):
         self._run_worker = worker
 
     def _after_run(self, strategy: Strategy) -> None:
+        self._busy = False
+        self.current_spinner.stop()
         for row in self._rows:
             row.btn_run.setEnabled(True)
         self.context.refresh_status(force=True)
+        self._sync_current()
         self.context.ok(f"Запущена стратегия «{strategy.title}»")
 
     def _after_run_error(self, message: str) -> None:
+        self._busy = False
+        self.current_spinner.stop()
         for row in self._rows:
             row.btn_run.setEnabled(True)
         self.context.refresh_status(force=True)
+        self._sync_current()
         self.context.error(message)
 
     # --- страница --------------------------------------------------------
 
     def on_activate(self) -> None:
         self._reload_rows()
+        self._reload_current()
+        self._sync_filters()
 
     def apply_theme(self) -> None:
-        self.auto_icon.set_color(self.context.color("accent"))
-        self.auto_spinner.set_color(self.context.color("accent"))
+        accent = self.context.color("accent")
+        self.auto_icon.set_color(accent)
+        self.auto_spinner.set_color(accent)
+        self.current_icon.set_color(accent)
+        self.current_spinner.set_color(accent)
+        self.discord_spinner.set_color(accent)
+        self.list_more.apply_theme()
         for row in self._rows:
             row.apply_theme()
         self._mark_running()

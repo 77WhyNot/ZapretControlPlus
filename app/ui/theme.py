@@ -358,6 +358,14 @@ QLabel#PageTitle {{
     color: {text};
 }}
 
+QLabel#HeroTitle {{
+    font-family: "Bahnschrift", "Franklin Gothic Medium", "Segoe UI", sans-serif;
+    font-size: 23px;
+    font-weight: 600;
+    color: {text};
+    background: transparent;
+}}
+
 QLabel[role="display"] {{
     font-family: "Bahnschrift", "Franklin Gothic Medium", "Segoe UI", sans-serif;
     font-weight: 600;
@@ -546,6 +554,38 @@ QToolTip {{
     border: 1px solid {border_strong};
     border-radius: 7px;
     padding: 6px 9px;
+}}
+
+/* Вкладки внутри раздела. */
+QFrame#SegmentBar {{
+    background: {surface};
+    border: 1px solid {border};
+    border-radius: 11px;
+}}
+QPushButton#SegmentButton {{
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 18px;
+    color: {text_dim};
+    font-weight: 600;
+}}
+QPushButton#SegmentButton:hover {{ background: {hover}; color: {text}; }}
+QPushButton#SegmentButton:checked {{ background: {accent_soft}; color: {accent_text}; }}
+
+/* Диалоги «Да/Нет». Текст у всех виджетов берётся из темы, а фон у
+   диалога по умолчанию системный, белый: в тёмной теме выходил белый
+   текст на белом. Фон задаём явно. */
+QDialog, QMessageBox {{
+    background: {surface};
+}}
+QMessageBox QLabel {{
+    color: {text};
+    font-size: 13px;
+    background: transparent;
+}}
+QMessageBox QPushButton {{
+    min-width: 88px;
 }}
 
 QMenu {{

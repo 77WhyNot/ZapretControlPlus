@@ -38,6 +38,32 @@ def apply_variant(widget: QWidget, variant: str = "", size: str = "") -> QWidget
     return widget
 
 
+def confirm(parent: QWidget, title: str, text: str, yes: str = "Да",
+            no: str = "Нет", default_yes: bool = True) -> bool:
+    """Вопрос «да или нет» в цветах темы.
+
+    Стандартный QMessageBox.question берёт системный белый фон, а цвет
+    текста — из темы, и в тёмной теме текст пропадал. Здесь и фон, и кнопки
+    свои, а подписи — по-русски.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    box = QMessageBox(parent)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIcon(QMessageBox.Icon.Question)
+    yes_button = box.addButton(yes, QMessageBox.ButtonRole.YesRole)
+    no_button = box.addButton(no, QMessageBox.ButtonRole.NoRole)
+    apply_variant(yes_button, "primary")
+    for button in (yes_button, no_button):
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Кнопки уже отполированы стилем при создании — перечитываем его.
+        restyle(button)
+    box.setDefaultButton(yes_button if default_yes else no_button)
+    box.exec()
+    return box.clickedButton() is yes_button
+
+
 def clear_layout(layout) -> None:
     """Полностью опустошить компоновку.
 
