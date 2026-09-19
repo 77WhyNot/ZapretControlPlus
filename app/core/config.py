@@ -75,6 +75,7 @@ DEFAULTS: dict[str, Any] = {
     "home_dns_preset": "xbox",      # сервис Smart DNS для тумблера на главной
     "speedtest_last": {},           # последний замер скорости, чтобы не пустовало
     "first_run": True,
+    "seen_version": "",            # версия, про которую уже рассказали «что нового»
     "window_geometry": "",
     "diagnostics_autorun": True,
 }

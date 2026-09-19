@@ -323,6 +323,8 @@ class MainWindow(QWidget):
         self.setMinimumSize(*MIN_SIZE)
         self.resize(*self._ideal_size())
         self._sidebar_compact = False
+        self._intro_shown = False
+        self._intro = None
 
         self._build_ui()
         self._build_tray()
@@ -682,6 +684,33 @@ class MainWindow(QWidget):
         super().showEvent(event)
         self._enable_native_resize()
         self._set_background(self.isMinimized())
+        if not self._intro_shown:
+            # Первый показ окна: приветствие или рассказ об обновлении. Ждём,
+            # пока окно проявится, иначе карточка выедет из пустого экрана.
+            QTimer.singleShot(650, self._show_intro)
+
+    def _show_intro(self) -> None:
+        """Приветствие при первом запуске и «что нового» после обновления."""
+        from app.core import whatsnew
+
+        if self._intro_shown or not self.isVisible() or self.isMinimized():
+            return
+        self._intro_shown = True
+        first = bool(config.get("first_run", True))
+        seen = str(config.get("seen_version", ""))
+        config.set("first_run", False, save=False)
+        config.set("seen_version", APP_VERSION)
+        if first:
+            kind = "welcome"
+        elif seen != APP_VERSION and whatsnew.changes_for():
+            kind = "changes"
+        else:
+            return
+
+        from app.ui.welcome import Intro
+
+        self._intro = Intro(self, self.context, kind)
+        self._intro.show_animated()
 
     def hideEvent(self, event) -> None:  # noqa: N802
         super().hideEvent(event)
@@ -868,7 +897,8 @@ class MainWindow(QWidget):
             return
         try:
             self.state_ready.emit(snapshot)
-        except RuntimeError:
+        except (RuntimeError, TypeError):
+            # Окно закрылось, пока шёл опрос: сигнал уже некому доставлять.
             pass
 
     def _mark_closing(self, *_args) -> None:

@@ -346,6 +346,10 @@ class UpdatesPage(Page):
             "новую версию. VPN на несколько секунд прервётся.",
             yes="Обновить", no="Позже",
         ):
+            # «Потом» — значит потом. Но без комментария не оставим.
+            from app.ui.clown import show_clown
+
+            self._clown = show_clown(self.window())
             return
 
         self.btn_app_install.setEnabled(False)

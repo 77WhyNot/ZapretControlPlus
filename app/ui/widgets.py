@@ -104,7 +104,34 @@ def frame_clock() -> FrameClock:
     return _clock
 
 
-def _snapshot(widget: QWidget, background: QColor):
+def fade_in(widget: QWidget, duration: int = 220, delay: int = 0,
+            keep: list | None = None) -> None:
+    """Мягко проявить виджет. Эффект снимаем сразу после: он замедляет отрисовку."""
+    from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+    effect = QGraphicsOpacityEffect(widget)
+    effect.setOpacity(0.0)
+    widget.setGraphicsEffect(effect)
+    animation = QPropertyAnimation(effect, b"opacity", widget)
+    animation.setDuration(duration)
+    animation.setStartValue(0.0)
+    animation.setEndValue(1.0)
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+    animation.finished.connect(lambda: widget.setGraphicsEffect(None))
+    if keep is not None:
+        keep.append(animation)
+    if delay <= 0:
+        animation.start()
+        return
+    # Таймер живёт при виджете: если виджет успели закрыть, запускать анимацию
+    # уже некому и нечему — иначе Qt падает на удалённом объекте.
+    timer = QTimer(widget)
+    timer.setSingleShot(True)
+    timer.timeout.connect(animation.start)
+    timer.start(delay)
+
+
+def snapshot(widget: QWidget, background: QColor):
     """Картинка виджета на сплошном фоне — без прозрачных дыр."""
     from PySide6.QtGui import QPixmap
 
@@ -214,10 +241,10 @@ def transition(host: QWidget, switch: Callable[[], None], background,
         host._transition_layer = overlay
     # Снимок берём вместе с недоигранным переходом, если он есть: так новый
     # начнётся ровно с того, что сейчас на экране.
-    before = _snapshot(host, background)
+    before = snapshot(host, background)
     overlay.finish()
     switch()
-    after = _snapshot(host, background)
+    after = snapshot(host, background)
     overlay.play(before, after, background, duration, slide)
     return True
 

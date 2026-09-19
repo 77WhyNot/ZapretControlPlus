@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import (
     QEasingCurve,
-    QPropertyAnimation,
     Qt,
     QTimer,
     QVariantAnimation,
@@ -19,7 +18,6 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
-    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -40,6 +38,7 @@ from app.ui.widgets import (
     Button,
     Card,
     ElidedLabel,
+    fade_in,
     IconLabel,
     Spinner,
     Switch,
@@ -49,23 +48,6 @@ from app.ui.widgets import (
 
 # Сервис Smart DNS, который включается с главной, если человек ничего не выбирал.
 DNS_DEFAULT_PRESET = "xbox"
-
-
-def fade_in(widget: QWidget, duration: int = 220, delay: int = 0,
-            keep: list | None = None) -> None:
-    """Мягко проявить виджет. Эффект снимаем сразу после: он замедляет отрисовку."""
-    effect = QGraphicsOpacityEffect(widget)
-    effect.setOpacity(0.0)
-    widget.setGraphicsEffect(effect)
-    animation = QPropertyAnimation(effect, b"opacity", widget)
-    animation.setDuration(duration)
-    animation.setStartValue(0.0)
-    animation.setEndValue(1.0)
-    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-    animation.finished.connect(lambda: widget.setGraphicsEffect(None))
-    if keep is not None:
-        keep.append(animation)
-    QTimer.singleShot(delay, animation.start)
 
 
 class QuickTile(QFrame):

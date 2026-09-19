@@ -131,6 +131,26 @@ def _selftest() -> int:
         config.set("theme", theme_key, save=False)
         window.apply_theme()
     print("темы: ок")
+
+    # Карточка приветствия: модуль подтягивается только при показе, поэтому
+    # в собранном виде её нужно проверить отдельно.
+    from app.ui.welcome import Intro
+
+    for kind in ("welcome", "changes"):
+        card = Intro(window, window.context, kind)
+        card.show_animated()
+        application.processEvents()
+        card.close_animated()
+        application.processEvents()
+    print("приветствие: ок")
+
+    from app.ui.clown import ClownScreen
+
+    joke = ClownScreen(window)
+    joke.grab()  # только рисуем, показывать в проверке нечего
+    joke.close()
+    application.processEvents()
+    print("клоун: ок")
     window.close()
     application.processEvents()
     print("SELFTEST OK")
