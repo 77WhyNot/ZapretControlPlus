@@ -160,6 +160,15 @@ class TabbedPage(QWidget):
     def tab_widget(self, key: str) -> QWidget | None:
         return self._pages.get(key)
 
+    def warm_tabs(self) -> None:
+        """Подготовить скрытые вкладки заранее, как и сами разделы."""
+        size = self.stack.size()
+        current = self.stack.currentWidget()
+        for page in self._pages.values():
+            if page is not current:
+                page.resize(size)
+                page.grab()
+
     def current_key(self) -> str:
         return self._current
 
@@ -169,23 +178,23 @@ class TabbedPage(QWidget):
             return
         from PySide6.QtCore import QTimer
 
-        from app.ui.widgets import crossfade
+        from app.ui.widgets import transition
 
         changed = key != self._current
-        previous = self.stack.currentWidget()
-        snapshot = (previous.grab() if changed and activate and previous is not None
-                    and self.isVisible() else None)
         self._current = key
         for name, button in self._buttons.items():
             button.setChecked(name == key)
-        self.stack.setCurrentWidget(page)
-        if snapshot is not None:
-            crossfade(self.stack, snapshot)
+        animated = False
+        if changed and activate and self.stack.currentWidget() is not None:
+            animated = transition(self.stack, lambda: self.stack.setCurrentWidget(page),
+                                  self.context.color("bg"), duration=200, slide=8)
+        else:
+            self.stack.setCurrentWidget(page)
         if activate:
             handler = getattr(page, "on_activate", None)
             if callable(handler):
-                if snapshot is not None:
-                    QTimer.singleShot(200, handler)
+                if animated:
+                    QTimer.singleShot(220, handler)
                 else:
                     handler()
 

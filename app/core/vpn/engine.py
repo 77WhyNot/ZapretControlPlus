@@ -196,18 +196,6 @@ class VpnEngine:
             return f"http://127.0.0.1:{self._probe_port}"
         return None
 
-    def local_proxy_url(self) -> str | None:
-        """Локальный вход движка в любом режиме.
-
-        В режиме «Прокси» это тот же прокси, что получает вся система, а в
-        режиме «Туннель» — служебный вход, который правилами всегда заведён
-        в VPN. Он нужен программам, которые ходят мимо системного прокси, —
-        например языковому серверу Antigravity на Go.
-        """
-        if self.status().running and self._probe_port:
-            return f"http://127.0.0.1:{self._probe_port}"
-        return None
-
     # --- наследство прошлого запуска -------------------------------------
 
     def restore_leftovers(self) -> list[str]:
@@ -405,16 +393,6 @@ class VpnEngine:
         else:
             self._probe_port = _free_port(0)
 
-        # Прокси Smart DNS для Gemini и Antigravity: адрес берём из кэша, а если
-        # он устарел — спрашиваем сервис. Без сети просто пойдём через VPN.
-        try:
-            from app.core import google as google_module
-
-            google_proxy_ip, google_proxy_hosts = google_module.smartdns_route()
-        except Exception as exc:  # noqa: BLE001
-            logs.warn(f"Прокси Smart DNS для Google не получен: {exc}")
-            google_proxy_ip, google_proxy_hosts = "", []
-
         config = config_module.build_config(
             servers, selected=selected, mode=mode,
             vpn_apps=vpn_apps, direct_apps=direct_apps,
@@ -428,9 +406,6 @@ class VpnEngine:
             probe_port=self._probe_port if transport == config_module.TRANSPORT_TUN else 0,
             transport=transport,
             proxy_port=proxy_port,
-            google_via_vpn=bool(settings.get("google_route_vpn", True)),
-            google_proxy_ip=google_proxy_ip,
-            google_proxy_hosts=google_proxy_hosts,
         )
         self.config_path.write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"

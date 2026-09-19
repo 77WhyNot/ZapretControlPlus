@@ -202,7 +202,13 @@ class StrategiesPage(Page):
         row = QHBoxLayout()
         row.setSpacing(10)
         self.current_box = QComboBox()
-        self.current_box.setMinimumWidth(260)
+        # Длинные названия стратегий не должны распирать окно: список сам
+        # сжимается, а в раскрытом виде показывает названия целиком.
+        self.current_box.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.current_box.setMinimumContentsLength(14)
+        self.current_box.setMinimumWidth(170)
         row.addWidget(self.current_box, 1)
         self.btn_current_args = Button("Аргументы", variant="ghost")
         self.btn_current_args.clicked.connect(self._show_current_args)
@@ -554,9 +560,8 @@ class StrategiesPage(Page):
 
         restart_row = QHBoxLayout()
         restart_row.setSpacing(10)
-        self.filters_hint = faint_label("", wrap=False)
-        restart_row.addWidget(self.filters_hint)
-        restart_row.addStretch(1)
+        self.filters_hint = faint_label("")
+        restart_row.addWidget(self.filters_hint, 1)
         self.btn_restart = Button("Перезапустить обход", variant="ghost")
         self.btn_restart.clicked.connect(self._restart_bypass)
         restart_row.addWidget(self.btn_restart)

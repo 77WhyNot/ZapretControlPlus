@@ -145,7 +145,7 @@ class LaneRow(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setContentsMargins(0, 3, 0, 3)
         layout.setSpacing(12)
 
         self.label = QLabel(title.upper())

@@ -16,6 +16,7 @@ from app.ui.widgets import (
     Button,
     Card,
     Divider,
+    FlowLayout,
     SettingRow,
     Spinner,
     Switch,
@@ -151,15 +152,14 @@ class SettingsPage(Page):
         card.add(section_label("Оформление"))
         card.add(faint_label("Тема применяется сразу, перезапуск не нужен."))
 
-        themes_row = QHBoxLayout()
-        themes_row.setSpacing(12)
+        # Темы и цвета переносятся на новую строку, если окно узкое.
+        themes_row = FlowLayout(spacing=12)
         self.theme_cards: list[ThemeCard] = []
         for item in theme.THEMES:
             widget = ThemeCard(item.key, item.title, item.colors)
             widget.picked.connect(self._pick_theme)
             themes_row.addWidget(widget)
             self.theme_cards.append(widget)
-        themes_row.addStretch(1)
         card.add_layout(themes_row)
 
         system_row = QHBoxLayout()
@@ -173,15 +173,13 @@ class SettingsPage(Page):
         card.add(Divider())
         card.add(section_label("Акцентный цвет"))
 
-        accents_row = QHBoxLayout()
-        accents_row.setSpacing(10)
+        accents_row = FlowLayout(spacing=10)
         self.accent_dots: list[AccentDot] = []
         for accent in theme.ACCENTS:
             dot = AccentDot(accent)
             dot.picked.connect(self._pick_accent)
             accents_row.addWidget(dot)
             self.accent_dots.append(dot)
-        accents_row.addStretch(1)
         card.add_layout(accents_row)
 
         self.body.addWidget(card)

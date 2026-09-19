@@ -39,6 +39,7 @@ from app.ui.widgets import (
     clear_layout,
     Button,
     Card,
+    ElidedLabel,
     IconLabel,
     Spinner,
     Switch,
@@ -99,7 +100,7 @@ class QuickTile(QFrame):
         self.title = QLabel(title, self)
         self.title.setStyleSheet("font-weight: 650; font-size: 14.5px; background: transparent;")
         texts.addWidget(self.title)
-        self.state = QLabel("", self)
+        self.state = ElidedLabel("", self)
         self.state.setObjectName("Faint")
         texts.addWidget(self.state)
         top.addLayout(texts, 1)
@@ -212,6 +213,12 @@ class HomePage(Page):
         self._animations: list = []
         self._shown_once = False
 
+        # Заголовок «Главная» тут не нужен: крупная строка состояния в шапке
+        # и есть заголовок. Без него всё главное влезает в окно без прокрутки.
+        self.header.hide()
+        self.body.setContentsMargins(24, 20, 24, 20)
+        self.body.setSpacing(14)
+
         self._build_banners()
         self._build_hero()
         self._build_tiles()
@@ -269,7 +276,7 @@ class HomePage(Page):
     # --- шапка ------------------------------------------------------------
 
     def _build_hero(self) -> None:
-        card = Card(padding=22, spacing=12)
+        card = Card(padding=20, spacing=10)
 
         top = QHBoxLayout()
         top.setSpacing(12)
@@ -279,8 +286,9 @@ class HomePage(Page):
         # Шрифт задаём стилем, а не setFont: общая тема перебивает setFont.
         self.state_title = QLabel("Всё идёт напрямую")
         self.state_title.setObjectName("HeroTitle")
-        top.addWidget(self.state_title)
-        top.addStretch(1)
+        # В узком окне длинный заголовок уходит на вторую строку.
+        self.state_title.setWordWrap(True)
+        top.addWidget(self.state_title, 1)
         self.uptime = faint_label("", wrap=False)
         top.addWidget(self.uptime)
         self.spinner = Spinner(18, self.context.color("accent"))
@@ -351,10 +359,39 @@ class HomePage(Page):
         self.tile_dns.controls.addWidget(more_dns)
         grid.addWidget(self.tile_dns, 1, 1)
 
+        # Списки сжимаются вместе с окном, а не распирают плитку длиной
+        # самого длинного названия.
+        for box in (self.strategy_box, self.server_box, self.dns_box):
+            box.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            box.setMinimumContentsLength(6)
+
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         self.body.addLayout(grid)
+        self._tiles_grid = grid
+        self._tile_columns = 2
         self._tiles = (self.tile_zapret, self.tile_vpn, self.tile_tg, self.tile_dns)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._fit_tiles()
+
+    def _fit_tiles(self) -> None:
+        """В узком окне плитки встают в один столбец, а не сжимаются в кашу.
+
+        Считаем по ширине самой страницы: область прокрутки в этот момент ещё
+        не перестроена и вернула бы прошлый размер.
+        """
+        columns = 2 if self.width() >= 760 else 1
+        if columns == self._tile_columns:
+            return
+        self._tile_columns = columns
+        for index, tile in enumerate(self._tiles):
+            self._tiles_grid.removeWidget(tile)
+            self._tiles_grid.addWidget(tile, index // columns, index % columns)
+        self._tiles_grid.setColumnStretch(1, 1 if columns == 2 else 0)
 
     # --- проверка ------------------------------------------------------------
 
@@ -377,6 +414,12 @@ class HomePage(Page):
         actions.addWidget(self.btn_diag)
         card.add_layout(actions)
 
+        self.check_hint = faint_label(
+            "Проверка открывает десяток заблокированных адресов и показывает, "
+            "какие из них отвечают прямо сейчас."
+        )
+        card.add(self.check_hint)
+
         self.check_host = QWidget()
         self.check_grid = QGridLayout(self.check_host)
         self.check_grid.setContentsMargins(0, 0, 0, 0)
@@ -392,6 +435,13 @@ class HomePage(Page):
     def _reload_strategies(self) -> None:
         items = self.context.load_strategies()
         current = self.context.current_strategy()
+        # Список тот же и выбрана та же — пересобирать нечего: это лишняя
+        # работа сразу после перехода на главную.
+        signature = ([(item.title, item.id) for item in items],
+                     current.id if current is not None else "")
+        if signature == getattr(self, "_strategies_signature", None):
+            return
+        self._strategies_signature = signature
         self.strategy_box.blockSignals(True)
         self.strategy_box.clear()
         for item in items:
@@ -845,9 +895,12 @@ class HomePage(Page):
         self.btn_check.setEnabled(True)
         self.check_spinner.stop()
         clear_layout(self.check_grid)
+        self.check_hint.setVisible(False)
         self.check_host.setVisible(True)
 
-        columns = 3
+        # Чем шире окно, тем больше столбцов и тем меньше строк по высоте.
+        width = self.scroll.viewport().width()
+        columns = 4 if width >= 900 else 3 if width >= 640 else 2
         for index, item in enumerate(results):
             row = QWidget(self.check_host)
             line = QHBoxLayout(row)

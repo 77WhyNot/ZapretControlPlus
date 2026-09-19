@@ -40,7 +40,6 @@ from app.ui.pages.about import AboutPage
 from app.ui.pages.base import TabbedPage
 from app.ui.pages.diagnostics import DiagnosticsPage
 from app.ui.pages.dns import DnsPage
-from app.ui.pages.google import GooglePage
 from app.ui.pages.home import HomePage
 from app.ui.pages.lists import ListsPage
 from app.ui.pages.settings import SettingsPage
@@ -50,10 +49,10 @@ from app.ui.pages.servers import VpnPage
 from app.ui.pages.telegram import TelegramPage
 from app.ui.pages.vpnapps import VpnAppsPage
 from app.ui.pages.updates import UpdatesPage
-from app.ui.widgets import IconLabel, Toast, confirm, crossfade
+from app.ui.widgets import IconLabel, Toast, confirm, transition
 
 # Сколько длится переход между разделами; обновление данных страницы ждёт его.
-PAGE_TRANSITION_MS = 200
+PAGE_TRANSITION_MS = 220
 
 # Опрос состояния системы: часто, пока окно на экране, и редко в трее — там
 # нужен только значок и автопауза обхода при чужом VPN.
@@ -64,12 +63,26 @@ POLL_HIDDEN_MS = 10000
 
 WM_NCHITTEST = 0x0084
 WM_GETMINMAXINFO = 0x0024
+WM_NCCALCSIZE = 0x0083
+GWL_STYLE = -16
+WS_THICKFRAME = 0x00040000
+SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_FRAMECHANGED = 0x0002, 0x0001, 0x0004, 0x0020
 HTCLIENT, HTCAPTION = 1, 2
 HTLEFT, HTRIGHT, HTTOP = 10, 11, 12
 HTTOPLEFT, HTTOPRIGHT, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT = 13, 14, 15, 16, 17
 MONITOR_DEFAULTTONEAREST = 2
-RESIZE_BORDER = 6
+RESIZE_BORDER = 8
+RESIZE_CORNER = 16
 TITLE_HEIGHT = 46
+
+# Размер окна. Окно тянется мышкой за любой край; меньше минимума не
+# сжимается, чтобы кнопки не налезали друг на друга.
+MIN_SIZE = (760, 520)
+IDEAL_SIZE = (1240, 860)       # главная влезает целиком, без прокрутки
+OLD_DEFAULT_SIZE = (1180, 760)  # размер прошлых версий: в нём главная не влезала
+SIDEBAR_WIDE = 212
+SIDEBAR_COMPACT = 64
+COMPACT_BELOW = 980             # окно уже — в меню остаются одни значки
 
 
 class POINT(ctypes.Structure):
@@ -95,17 +108,14 @@ class MONITORINFO(ctypes.Structure):
 PRIMARY_PAGES = (
     ("home", "Главная", "home"),
     ("strategies", "Запрет", "shield_check"),
+    ("vpn", "VPN", "layers"),
     ("telegram", "Telegram", "telegram"),
-    ("google", "Google", "sparkles"),
     ("dns", "Smart DNS", "globe"),
     ("diagnostics", "Диагностика", "activity"),
     ("settings", "Настройки", "settings"),
 )
 
-# VPN включается плиткой на главной, а настройки подписки, серверов и
-# программ нужны реже — они здесь, в «Ещё».
 MORE_PAGES = (
-    ("vpn", "VPN", "layers"),
     ("speed", "Скорость интернета", "bolt"),
     ("lists", "Списки сайтов", "list"),
     ("about", "О программе", "info"),
@@ -256,10 +266,25 @@ class NavButton(QPushButton):
         self.key = key
         self.icon_name = icon_name
         self.context = context
+        self.title = title
+        self.compact = False
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(38)
         self.apply_theme()
+
+    def set_title(self, title: str) -> None:
+        self.title = title
+        self._show_title()
+
+    def set_compact(self, compact: bool) -> None:
+        """В узком окне меню — одни значки, подпись уходит в подсказку."""
+        self.compact = compact
+        self._show_title()
+
+    def _show_title(self) -> None:
+        self.setText("" if self.compact else self.title)
+        self.setToolTip(self.title if self.compact else "")
 
     def apply_theme(self) -> None:
         color = (
@@ -295,8 +320,9 @@ class MainWindow(QWidget):
             | Qt.WindowType.WindowSystemMenuHint
         )
         self.setWindowTitle(APP_NAME)
-        self.setMinimumSize(1000, 660)
-        self.resize(1180, 760)
+        self.setMinimumSize(*MIN_SIZE)
+        self.resize(*self._ideal_size())
+        self._sidebar_compact = False
 
         self._build_ui()
         self._build_tray()
@@ -353,7 +379,7 @@ class MainWindow(QWidget):
 
         self.sidebar = QWidget(body)
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(212)
+        self.sidebar.setFixedWidth(SIDEBAR_WIDE)
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(10, 14, 10, 14)
         sidebar_layout.setSpacing(3)
@@ -380,7 +406,6 @@ class MainWindow(QWidget):
             "home": HomePage,
             "vpn": _vpn_section,
             "telegram": TelegramPage,
-            "google": GooglePage,
             "dns": DnsPage,
             "strategies": StrategiesPage,
             "lists": ListsPage,
@@ -461,10 +486,8 @@ class MainWindow(QWidget):
         Перекраска всех виджетов занимает долю секунды, и без снимка было
         видно, как окно перерисовывается кусками.
         """
-        snapshot = self.root.grab() if self.isVisible() else None
-        self.apply_theme()
-        if snapshot is not None:
-            crossfade(self.root, snapshot, duration=280)
+        transition(self.root, self.apply_theme, self.context.color("bg"),
+                   duration=280, slide=0)
 
     def apply_theme(self) -> None:
         from app.ui import icons as icon_cache
@@ -533,6 +556,31 @@ class MainWindow(QWidget):
         for index, (key, title, _icon) in enumerate(PAGES, start=1):
             self._on_progress(f"Готовим «{title}»…", 0.45 + 0.5 * index / total)
             self.ensure_page(key)
+        self._warm_pages()
+
+    def _warm_pages(self) -> None:
+        """Оформить, разложить и один раз нарисовать все страницы заранее.
+
+        Первое открытие раздела стоило до 0,2 секунды: Qt впервые применял к
+        странице стиль, раскладывал и рисовал её — переход в этот момент
+        замирал. Под заставкой этого не видно.
+        """
+        layout = self.layout()
+        if layout is not None:
+            layout.activate()
+        size = self.pages.size()
+        if size.width() < 100 or size.height() < 100:
+            return
+        current = self.pages.currentWidget()
+        for widget in list(self.page_widgets.values()):
+            if widget is not current:
+                widget.resize(size)
+            widget.grab()
+            # У раздела с вкладками — и скрытые вкладки: их размер известен
+            # только после того, как раздел разложен.
+            tabs = getattr(widget, "warm_tabs", None)
+            if callable(tabs):
+                tabs()
 
     def show_page(self, key: str) -> None:
         if key in ALIASES:
@@ -546,15 +594,12 @@ class MainWindow(QWidget):
         widget = self.ensure_page(key)
         if widget is None:
             return
-        previous = self.pages.currentWidget()
-        changed = previous is not widget
-        # Снимок уходящей страницы тает поверх новой: прозрачность считается
-        # для одной картинки, а не для страницы с десятками виджетов.
-        snapshot = previous.grab() if changed and previous is not None \
-            and self.isVisible() else None
-        self.pages.setCurrentWidget(widget)
-        if snapshot is not None:
-            crossfade(self.pages, snapshot)
+        animated = False
+        if self.pages.currentWidget() is not widget:
+            animated = transition(
+                self.pages, lambda: self.pages.setCurrentWidget(widget),
+                self.context.color("bg"), duration=PAGE_TRANSITION_MS,
+            )
         # Группа исключающая: снять галочку со всех она не даёт, и при
         # переходе в раздел из «Ещё» прошлый пункт оставался подсвеченным.
         self.nav_group.setExclusive(False)
@@ -568,16 +613,16 @@ class MainWindow(QWidget):
         more = getattr(self, "more_button", None)
         if more is not None:
             title = dict((k, t) for k, t, _ in MORE_PAGES).get(key)
-            more.setText(title or "Ещё")
+            more.set_title(title or "Ещё")
             more.setChecked(key in more_keys)
             more.apply_theme()
         self._move_marker(key)
         activate = getattr(widget, "on_activate", None)
         if callable(activate):
-            if snapshot is not None:
+            if animated:
                 # Обновление данных страницы — после перехода, иначе оно
                 # отнимает кадры у анимации.
-                QTimer.singleShot(PAGE_TRANSITION_MS, activate)
+                QTimer.singleShot(PAGE_TRANSITION_MS + 20, activate)
             else:
                 activate()
 
@@ -635,6 +680,7 @@ class MainWindow(QWidget):
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        self._enable_native_resize()
         self._set_background(self.isMinimized())
 
     def hideEvent(self, event) -> None:  # noqa: N802
@@ -660,8 +706,19 @@ class MainWindow(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._fit_sidebar()
         if self.toast.isVisible():
             self.toast._reposition()
+
+    def _fit_sidebar(self) -> None:
+        """Узкое окно — меню из одних значков, чтобы страницам хватало места."""
+        compact = self.width() < COMPACT_BELOW
+        if compact == self._sidebar_compact:
+            return
+        self._sidebar_compact = compact
+        self.sidebar.setFixedWidth(SIDEBAR_COMPACT if compact else SIDEBAR_WIDE)
+        for button in (*self.nav_buttons.values(), self.more_button):
+            button.set_compact(compact)
 
     def nativeEvent(self, event_type: QByteArray, message) -> tuple[bool, int]:  # noqa: N802
         if event_type not in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
@@ -676,7 +733,30 @@ class MainWindow(QWidget):
         if msg.message == WM_GETMINMAXINFO:
             self._fix_maximized_bounds(msg)
             return False, 0
+        if msg.message == WM_NCCALCSIZE and msg.wParam:
+            # Окно с рамкой для изменения размера, но рисуем его целиком сами:
+            # содержимое занимает всё окно, рамки Windows не видно.
+            return True, 0
         return False, 0
+
+    def _enable_native_resize(self) -> None:
+        """Разрешить Windows тянуть окно за края.
+
+        Безрамочному окну Windows менять размер не даёт: для этого нужен стиль
+        «рамка изменения размера». Сама рамка не появится — её съедает ответ
+        на WM_NCCALCSIZE выше.
+        """
+        try:
+            hwnd = wintypes.HWND(int(self.winId()))
+            user32 = ctypes.windll.user32
+            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+            if style & WS_THICKFRAME:
+                return
+            user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_THICKFRAME)
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+        except (OSError, ValueError, AttributeError) as exc:
+            logs.warn(f"Не удалось включить растягивание окна: {exc}")
 
     def _hit_test(self) -> tuple[bool, int]:
         position = self.mapFromGlobal(QCursor.pos())
@@ -684,17 +764,22 @@ class MainWindow(QWidget):
         width, height = self.width(), self.height()
 
         if not self.isMaximized():
-            left = x <= RESIZE_BORDER
+            left = x < RESIZE_BORDER
             right = x >= width - RESIZE_BORDER
-            top = y <= RESIZE_BORDER
+            top = y < RESIZE_BORDER
             bottom = y >= height - RESIZE_BORDER
-            if top and left:
+            # Угол ловится с запасом: попасть в квадрат 8×8 мышкой трудно.
+            near_left = x < RESIZE_CORNER
+            near_right = x >= width - RESIZE_CORNER
+            near_top = y < RESIZE_CORNER
+            near_bottom = y >= height - RESIZE_CORNER
+            if (top and near_left) or (left and near_top):
                 return True, HTTOPLEFT
-            if top and right:
+            if (top and near_right) or (right and near_top):
                 return True, HTTOPRIGHT
-            if bottom and left:
+            if (bottom and near_left) or (left and near_bottom):
                 return True, HTBOTTOMLEFT
-            if bottom and right:
+            if (bottom and near_right) or (right and near_bottom):
                 return True, HTBOTTOMRIGHT
             if left:
                 return True, HTLEFT
@@ -923,6 +1008,17 @@ class MainWindow(QWidget):
         worker.run(tgws.tgws_engine.start)
         self._tgws_worker = worker
 
+    @staticmethod
+    def _ideal_size() -> tuple[int, int]:
+        """Размер, в котором главная видна целиком, — но не больше экрана."""
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return IDEAL_SIZE
+        available = screen.availableGeometry()
+        width = max(MIN_SIZE[0], min(IDEAL_SIZE[0], available.width() - 60))
+        height = max(MIN_SIZE[1], min(IDEAL_SIZE[1], available.height() - 40))
+        return width, height
+
     def _restore_geometry(self) -> None:
         saved = str(config.get("window_geometry", ""))
         if not saved:
@@ -931,6 +1027,13 @@ class MainWindow(QWidget):
         try:
             values = [int(part) for part in saved.split(",")]
             if len(values) == 4:
+                # Прошлые версии открывались в 1180×760, и главную приходилось
+                # прокручивать. Такой размер человек не выбирал — он достался
+                # по умолчанию, поэтому один раз заменяем его удобным.
+                if tuple(values[2:]) == OLD_DEFAULT_SIZE:
+                    self.resize(*self._ideal_size())
+                    self._center()
+                    return
                 screen = QGuiApplication.primaryScreen()
                 available = screen.availableGeometry() if screen else None
                 self.setGeometry(*values)

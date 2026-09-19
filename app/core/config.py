@@ -71,14 +71,6 @@ DEFAULTS: dict[str, Any] = {
     "vpn_last_update": 0,
     "vpn_proxy_port": 10808,
     "vpn_proxy_backup": {},         # системный прокси до нас (режим «Прокси»)
-    # Google (Gemini, AI Studio, Antigravity)
-    "google_route_vpn": True,       # домены Google всегда через VPN
-    "google_launch_via_vpn": True,  # Antigravity запускать с нашим прокси
-    # Gemini и Antigravity: smartdns — через прокси Smart DNS (адреса VPN Google
-    # часто считает российскими), vpn — через VPN, как остальной Google.
-    "google_route": "smartdns",
-    "google_smartdns": "xbox",      # xbox | comss
-    "google_proxy": {},             # найденный прокси: адрес, хосты, время
     # Прочее
     "home_dns_preset": "xbox",      # сервис Smart DNS для тумблера на главной
     "speedtest_last": {},           # последний замер скорости, чтобы не пустовало

@@ -329,20 +329,27 @@ class SpeedTest:
         return result
 
 
-def describe_route() -> str:
-    """Каким путём пойдёт замер — это половина смысла результата."""
+def describe_route(vpn=None, zapret_running: bool | None = None) -> str:
+    """Каким путём пойдёт замер — это половина смысла результата.
+
+    Окно передаёт состояние из своего последнего опроса: спрашивать службу
+    Windows прямо из окна — это заметная пауза.
+    """
     from app.core.engine import engine
     from app.core.vpn import config as vpn_config
     from app.core.vpn.engine import vpn_engine
 
     parts: list[str] = []
-    vpn = vpn_engine.status()
+    if vpn is None:
+        vpn = vpn_engine.status()
+    if zapret_running is None:
+        zapret_running = engine.status().running
     if vpn.running:
         parts.append(
             "через VPN (туннель)"
             if vpn.transport == vpn_config.TRANSPORT_TUN else "через VPN (прокси)"
         )
-    if engine.status().running:
+    if zapret_running:
         parts.append("с обходом DPI")
     return " ".join(parts) if parts else "напрямую"
 

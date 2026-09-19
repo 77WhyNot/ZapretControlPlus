@@ -8,6 +8,7 @@ from PySide6.QtCore import (
     QEasingCurve,
     QObject,
     QPropertyAnimation,
+    QRect,
     QRectF,
     QSize,
     Qt,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -102,33 +104,122 @@ def frame_clock() -> FrameClock:
     return _clock
 
 
-def crossfade(host: QWidget, snapshot, duration: int = 190) -> None:
-    """Мягкая смена содержимого: старый кадр-картинка тает поверх нового.
+def _snapshot(widget: QWidget, background: QColor):
+    """Картинка виджета на сплошном фоне — без прозрачных дыр."""
+    from PySide6.QtGui import QPixmap
 
-    Прозрачность считается для одной картинки, а не для живой страницы с
-    десятками виджетов, — поэтому переход не дёргается даже на тяжёлых
-    страницах.
+    grabbed = widget.grab()
+    result = QPixmap(grabbed.size())
+    result.setDevicePixelRatio(grabbed.devicePixelRatio())
+    result.fill(background)
+    painter = QPainter(result)
+    painter.drawPixmap(0, 0, grabbed)
+    painter.end()
+    return result
+
+
+class _Transition(QWidget):
+    """Кадр перехода: старый вид тает, новый чуть поднимается на место.
+
+    Рисуются только две готовые картинки. Прежде старый кадр таял поверх
+    живой страницы, и Qt на каждом кадре перерисовывал её целиком со всеми
+    виджетами — отсюда и подлагивание на тяжёлых разделах.
     """
-    from PySide6.QtWidgets import QGraphicsOpacityEffect
 
-    if snapshot is None or snapshot.isNull():
-        return
-    overlay = QLabel(host)
-    overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-    overlay.setPixmap(snapshot)
-    overlay.setGeometry(0, 0, host.width(), host.height())
-    effect = QGraphicsOpacityEffect(overlay)
-    effect.setOpacity(1.0)
-    overlay.setGraphicsEffect(effect)
-    overlay.show()
-    overlay.raise_()
-    animation = QPropertyAnimation(effect, b"opacity", overlay)
-    animation.setDuration(duration)
-    animation.setStartValue(1.0)
-    animation.setEndValue(0.0)
-    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-    animation.finished.connect(overlay.deleteLater)
-    animation.start()
+    def __init__(self, host: QWidget) -> None:
+        super().__init__(host)
+        self.setObjectName("Transition")
+        self._host = host
+        self._before = None
+        self._after = None
+        self._background = QColor("#000000")
+        self._slide = 0.0
+        self._progress = 0.0
+        # Непрозрачный: под ним Qt ничего не перерисовывает.
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.hide()
+        # Окно тянут мышкой прямо во время перехода — снимки уже не того
+        # размера, поэтому переход честнее оборвать.
+        host.installEventFilter(self)
+
+        from PySide6.QtCore import QVariantAnimation
+
+        self._animation = QVariantAnimation(self)
+        self._animation.setStartValue(0.0)
+        self._animation.setEndValue(1.0)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(self._advance)
+        self._animation.finished.connect(self.finish)
+
+    def play(self, before, after, background: QColor, duration: int, slide: float) -> None:
+        # Слой один на всю жизнь окна: новый виджет Qt каждый раз заново
+        # сверял бы со всеми правилами темы, а это лишние миллисекунды щелчка.
+        self._before = before
+        self._after = after
+        self._background = QColor(background)
+        self._slide = slide
+        self._progress = 0.0
+        self.setGeometry(self._host.rect())
+        self._animation.setDuration(duration)
+        self.show()
+        self.raise_()
+        self._animation.start()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        from PySide6.QtCore import QEvent
+
+        if (watched is self._host and event.type() == QEvent.Type.Resize
+                and self.isVisible()):
+            self.finish()
+        return False
+
+    def _advance(self, value) -> None:
+        self._progress = float(value)
+        self.update()
+
+    def finish(self) -> None:
+        self._animation.stop()
+        self.hide()
+        # Картинки размером с окно держать незачем.
+        self._before = self._after = None
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        if self._after is None or self._before is None:
+            return
+        painter = QPainter(self)
+        progress = self._progress
+        offset = (1.0 - progress) * self._slide
+        if offset > 0.01:
+            painter.fillRect(self.rect(), self._background)
+        painter.drawPixmap(0, int(round(offset)), self._after)
+        if progress < 1.0:
+            painter.setOpacity(1.0 - progress)
+            painter.drawPixmap(0, 0, self._before)
+        painter.end()
+
+
+def transition(host: QWidget, switch: Callable[[], None], background,
+               duration: int = 220, slide: float = 10.0) -> bool:
+    """Сменить содержимое host плавно: switch() меняет его, а переход рисуется
+    поверх из двух снимков. Возвращает True, если переход был."""
+    if not host.isVisible() or host.width() < 2 or host.height() < 2:
+        switch()
+        return False
+    background = QColor(background)
+    overlay = getattr(host, "_transition_layer", None)
+    if overlay is None:
+        overlay = _Transition(host)
+        host._transition_layer = overlay
+    # Снимок берём вместе с недоигранным переходом, если он есть: так новый
+    # начнётся ровно с того, что сейчас на экране.
+    before = _snapshot(host, background)
+    overlay.finish()
+    switch()
+    after = _snapshot(host, background)
+    overlay.play(before, after, background, duration, slide)
+    return True
 
 
 def confirm(parent: QWidget, title: str, text: str, yes: str = "Да",
@@ -556,6 +647,110 @@ def muted_label(text: str, wrap: bool = True) -> QLabel:
     label.setObjectName("Muted")
     label.setWordWrap(wrap)
     return label
+
+
+class ElidedLabel(QLabel):
+    """Подпись в одну строку: не влезает — обрезается многоточием.
+
+    Обычная подпись без переноса не даёт окну стать уже своей длины, и в
+    узком окне страница вылезала за край. Полный текст — в подсказке.
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(40)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._full = str(text)
+        self._elide()
+
+    def text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._elide()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        # Шрифт задаёт тема: после неё ширина текста другая.
+        if event.type() in (event.Type.FontChange, event.Type.StyleChange):
+            self._elide()
+
+    def _elide(self) -> None:
+        room = max(0, self.contentsRect().width())
+        shown = self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, room)
+        QLabel.setText(self, shown)
+        self.setToolTip(self._full if shown != self._full else "")
+
+
+class FlowLayout(QLayout):
+    """Элементы в ряд, а если не влезают — с переносом на следующую строку."""
+
+    def __init__(self, parent: QWidget | None = None, spacing: int = 10) -> None:
+        super().__init__(parent)
+        self._items: list = []
+        self._gap = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:  # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int):  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._arrange(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._arrange(rect, apply=True)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        width = height = 0
+        for item in self._visible():
+            hint = item.sizeHint()
+            width += hint.width() + (self._gap if width else 0)
+            height = max(height, hint.height())
+        return QSize(width, height)
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        size = QSize(0, 0)
+        for item in self._visible():
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _visible(self) -> list:
+        return [item for item in self._items if not item.isEmpty()]
+
+    def _arrange(self, rect, apply: bool) -> int:
+        x, y, line = rect.x(), rect.y(), 0
+        for item in self._visible():
+            hint = item.sizeHint()
+            if line and x + hint.width() > rect.x() + rect.width():
+                x = rect.x()
+                y += line + self._gap
+                line = 0
+            if apply:
+                item.setGeometry(QRect(x, y, hint.width(), hint.height()))
+            x += hint.width() + self._gap
+            line = max(line, hint.height())
+        return y + line - rect.y()
 
 
 def faint_label(text: str, wrap: bool = True) -> QLabel:

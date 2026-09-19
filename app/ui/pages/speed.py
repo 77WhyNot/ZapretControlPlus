@@ -234,7 +234,7 @@ class SpeedPage(Page):
         if self._worker is not None and self._worker.busy():
             return
         self._peak = 0.0
-        self.route_label.setText(speedtest.describe_route())
+        self.route_label.setText(self._route())
         self.gauge.animate_to(0.0)
         self.gauge.set_stage("измеряю задержку…", "мс")
         self.btn_run.setText("Остановить")
@@ -337,7 +337,7 @@ class SpeedPage(Page):
     def _restore_last(self) -> None:
         saved = config.get("speedtest_last", {}) or {}
         if not isinstance(saved, dict) or not saved.get("download"):
-            self.route_label.setText(speedtest.describe_route())
+            self.route_label.setText(self._route())
             return
         self.stat_down.set_value(
             f"{speedtest.format_speed(float(saved.get('download', 0)))} Мбит/с"
@@ -358,12 +358,16 @@ class SpeedPage(Page):
             f"Прошлый замер: {time.strftime('%d.%m %H:%M', when)} · "
             f"путь: {saved.get('route', '—')}"
         )
-        self.route_label.setText(speedtest.describe_route())
+        self.route_label.setText(self._route())
 
     # --- страница ---------------------------------------------------------
 
+    def _route(self) -> str:
+        return speedtest.describe_route(self.context.vpn_status,
+                                        self.context.status.running)
+
     def on_activate(self) -> None:
-        self.route_label.setText(speedtest.describe_route())
+        self.route_label.setText(self._route())
 
     def apply_theme(self) -> None:
         self.gauge.update()

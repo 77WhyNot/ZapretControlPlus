@@ -88,7 +88,7 @@ def build() -> Image.Image:
     )
     draw.text(
         (left, 286),
-        "zapret · VPN по программам · Telegram · Google · Smart DNS",
+        "zapret · VPN по программам · Telegram · Smart DNS · замер скорости",
         font=small_font, fill=(160, 190, 240),
     )
     return canvas.convert("RGB")
