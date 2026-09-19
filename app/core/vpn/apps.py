@@ -203,6 +203,51 @@ def catalog(include_background: bool = False,
     )
 
 
+def match_names(names: list[str]) -> list[str]:
+    """Написания имени, по которым движок узнает программу.
+
+    sing-box сравнивает имя файла посимвольно: «telegram.exe» и
+    «Telegram.exe» для него разные программы, и правило молча не срабатывает —
+    со стороны выглядит так, будто VPN вообще не работает. Человек пишет имя
+    как удобно, поэтому в правило кладём все разумные написания сразу:
+    лишние просто ни с чем не совпадут.
+    """
+    running: dict[str, str] = {}
+    try:
+        for _pid, process in winapi.iter_processes():
+            running.setdefault(process.lower(), process)
+    except Exception:  # noqa: BLE001 — без списка процессов просто меньше вариантов
+        running = {}
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in names:
+        cleaned = raw.strip()
+        if not cleaned:
+            continue
+        stem = Path(cleaned).stem
+        suffix = Path(cleaned).suffix or ".exe"
+        variants = {
+            cleaned,
+            cleaned.lower(),
+            stem.lower() + suffix.lower(),
+            stem.lower() + suffix.upper(),
+            (stem[:1].upper() + stem[1:] + suffix) if stem else cleaned,
+        }
+        # Самое верное написание — то, как файл называется на самом деле.
+        actual = running.get(cleaned.lower())
+        if actual:
+            variants.add(actual)
+        found = resolve_executable(cleaned)
+        if found:
+            variants.add(Path(found).name)
+        for variant in sorted(variants):
+            if variant and variant not in seen:
+                seen.add(variant)
+                result.append(variant)
+    return result
+
+
 def normalize(names: list[str]) -> list[str]:
     """Убрать дубликаты и пустые строки, сохранив порядок."""
     result: list[str] = []

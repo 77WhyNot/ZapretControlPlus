@@ -273,6 +273,9 @@ class HomePage(Page):
         self.btn_check = Button("Проверить доступность", variant="primary")
         self.btn_check.clicked.connect(self._run_check)
         actions.addWidget(self.btn_check)
+        self.btn_speed = Button("Замерить скорость", variant="soft")
+        self.btn_speed.clicked.connect(self._open_speed)
+        actions.addWidget(self.btn_speed)
         self.btn_diag = Button("Диагностика", variant="ghost")
         self.btn_diag.clicked.connect(lambda: self.context.navigate.emit("diagnostics"))
         actions.addWidget(self.btn_diag)
@@ -738,6 +741,16 @@ class HomePage(Page):
         worker.failed.connect(self._check_failed)
         worker.run(autotest.quick_check, proxy_url)
         self._check_worker = worker
+
+    def _open_speed(self) -> None:
+        """Кнопка ведёт на страницу замера и сразу его запускает."""
+        self.context.navigate.emit("speed")
+        window = self.window()
+        ensure = getattr(window, "ensure_page", None)
+        page = ensure("speed") if callable(ensure) else None
+        starter = getattr(page, "start_measure", None)
+        if callable(starter):
+            QTimer.singleShot(260, starter)
 
     def _check_failed(self, message: str) -> None:
         self.btn_check.setEnabled(True)

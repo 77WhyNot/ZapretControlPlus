@@ -356,6 +356,31 @@ def mark_checked() -> None:
     config.set("last_update_check", int(time.time()))
 
 
+def should_notify_app(version: str) -> bool:
+    """Напоминать о новой версии стоит, но раз в сутки, а не каждый час."""
+    import time
+
+    if not version or version == "—":
+        return False
+    if version == str(config.get("skipped_app_version", "")):
+        return False
+    hours = float(config.get("update_notice_interval_hours", 24) or 24)
+    last = float(config.get("last_update_notice", 0))
+    same = version == str(config.get("notified_app_version", ""))
+    if same and (time.time() - last) < hours * 3600:
+        return False
+    return True
+
+
+def mark_notified(version: str) -> None:
+    import time
+
+    config.update({
+        "notified_app_version": version,
+        "last_update_notice": int(time.time()),
+    })
+
+
 def running_from_installed_copy() -> bool:
     """В dev-режиме автообновление приложения смысла не имеет."""
     return getattr(sys, "frozen", False) and os.path.exists(sys.executable)

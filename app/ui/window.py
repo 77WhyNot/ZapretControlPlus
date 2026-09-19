@@ -40,9 +40,11 @@ from app.ui.context import AppContext
 from app.ui.pages.about import AboutPage
 from app.ui.pages.diagnostics import DiagnosticsPage
 from app.ui.pages.dns import DnsPage
+from app.ui.pages.google import GooglePage
 from app.ui.pages.home import HomePage
 from app.ui.pages.lists import ListsPage
 from app.ui.pages.settings import SettingsPage
+from app.ui.pages.speed import SpeedPage
 from app.ui.pages.strategies import StrategiesPage
 from app.ui.pages.servers import VpnPage
 from app.ui.pages.telegram import TelegramPage
@@ -86,6 +88,7 @@ PRIMARY_PAGES = (
     ("home", "Обзор", "home"),
     ("vpn", "VPN", "layers"),
     ("telegram", "Telegram", "telegram"),
+    ("google", "Google", "sparkles"),
     ("strategies", "Стратегии", "route"),
     ("dns", "Smart DNS", "globe"),
     ("diagnostics", "Диагностика", "activity"),
@@ -93,6 +96,7 @@ PRIMARY_PAGES = (
 )
 
 MORE_PAGES = (
+    ("speed", "Скорость интернета", "bolt"),
     ("vpnapps", "Программы VPN", "list"),
     ("lists", "Списки сайтов", "list"),
     ("updates", "Обновления", "cloud_download"),
@@ -239,11 +243,20 @@ class MainWindow(QWidget):
 
         self.context.notify.connect(self._show_toast)
         self.context.navigate.connect(self.show_page)
+        self.context.update_available.connect(self._update_found)
         engine.on_state_change = self._engine_changed
 
         self._poll = QTimer(self)
         self._poll.timeout.connect(self._poll_state)
         self._poll.start(2500)
+
+        # Программа живёт в трее неделями, а обновления выходят чаще. Раз в
+        # полчаса тихо смотрим, не пора ли проверить версию; само уведомление
+        # показывается не чаще раза в сутки.
+        self._notice_kind = ""
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self._check_updates_if_due)
+        self._update_timer.start(30 * 60 * 1000)
         QTimer.singleShot(150, lambda: self._poll_state(force=True))
         QTimer.singleShot(2500, self._startup_tasks)
 
@@ -307,9 +320,11 @@ class MainWindow(QWidget):
             "vpn": VpnPage,
             "vpnapps": VpnAppsPage,
             "telegram": TelegramPage,
+            "google": GooglePage,
             "dns": DnsPage,
             "strategies": StrategiesPage,
             "lists": ListsPage,
+            "speed": SpeedPage,
             "diagnostics": DiagnosticsPage,
             "updates": UpdatesPage,
             "settings": SettingsPage,
@@ -357,6 +372,9 @@ class MainWindow(QWidget):
         # Иконку ставим до show(): иначе Qt пишет «No Icon set».
         self.tray.setIcon(self._app_icon())
         self.tray.show()
+        # Единственное уведомление, которое мы себе позволяем, — про новую
+        # версию. По клику сразу ведём на обновление.
+        self.tray.messageClicked.connect(self._notice_clicked)
 
         self.context.status_changed.connect(self._update_tray)
 
@@ -689,14 +707,47 @@ class MainWindow(QWidget):
 
     # --- запуск и завершение ---------------------------------------------
 
+    def _check_updates_if_due(self) -> None:
+        """Тихая проверка версий по расписанию — и при запуске, и потом."""
+        if not (config.get("check_core_updates", True)
+                or config.get("check_app_updates", True)):
+            return
+        if not updater.is_check_due():
+            return
+        page = self.ensure_page("updates")
+        checker = getattr(page, "check_silently", None)
+        if callable(checker):
+            checker()
+
+    def _update_found(self, kind: str, info) -> None:
+        """Новая версия программы — напоминаем, но не чаще раза в сутки."""
+        if kind != "app" or info is None or not getattr(info, "available", False):
+            return
+        if not updater.should_notify_app(info.latest):
+            return
+        updater.mark_notified(info.latest)
+        self._notice_kind = "app"
+        self.tray.showMessage(
+            f"{APP_NAME}: вышла версия {info.latest}",
+            "Нажмите на это уведомление, чтобы обновиться — программа "
+            "скачает и поставит новую версию сама.",
+            self._app_icon(),
+            12000,
+        )
+
+    def _notice_clicked(self) -> None:
+        """Клик по уведомлению из трея ведёт прямо к обновлению."""
+        if self._notice_kind != "app":
+            return
+        self._notice_kind = ""
+        self.show_normal()
+        self.show_page("updates")
+        self.context.install_update.emit("app")
+
     def _startup_tasks(self) -> None:
         self._start_tgws_if_wanted()
         self._start_vpn_if_wanted()
-        updates_page = self.ensure_page("updates")
-        if config.get("check_core_updates", True) and updater.is_check_due():
-            checker = getattr(updates_page, "check_silently", None)
-            if callable(checker):
-                checker()
+        self._check_updates_if_due()
         if config.get("autorun_last_strategy", False) and not self.context.status.running:
             home = self.ensure_page("home")
             starter = getattr(home, "start_bypass", None)
@@ -775,14 +826,10 @@ class MainWindow(QWidget):
             event.accept()
             return
         if config.get("close_to_tray", True):
+            # Молча: всплывашка «программа свёрнута в трей» появлялась каждый
+            # раз и только мешала. Значок в трее и так виден.
             event.ignore()
             self.hide()
-            self.tray.showMessage(
-                APP_NAME,
-                "Программа свёрнута в трей и продолжает работать.",
-                self._app_icon(),
-                3000,
-            )
             return
         self.quit_app()
         event.accept()

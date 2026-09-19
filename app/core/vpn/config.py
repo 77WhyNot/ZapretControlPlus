@@ -120,13 +120,21 @@ def build_config(
     probe_port: int = 0,
     transport: str = TRANSPORT_TUN,
     proxy_port: int = 10808,
+    google_via_vpn: bool = True,
 ) -> dict[str, Any]:
     if transport == TRANSPORT_PROXY:
         return build_proxy_config(servers, selected, clash_port, clash_secret,
                                   log_level, proxy_port)
 
-    vpn_apps = [name for name in (vpn_apps or []) if name]
-    direct_apps = [name for name in (direct_apps or []) if name]
+    # Имя программы движок сравнивает посимвольно, поэтому кладём в правило
+    # все написания — иначе «telegram.exe» из ручного ввода не совпадёт с
+    # настоящим «Telegram.exe», и правило тихо не сработает.
+    from app.core.vpn import apps as apps_module
+
+    vpn_apps = apps_module.match_names([name for name in (vpn_apps or []) if name])
+    direct_apps = apps_module.match_names(
+        [name for name in (direct_apps or []) if name]
+    )
     outbounds = _outbounds(servers, selected)
 
     # Порядок правил важен: сначала распознаём протокол, потом перехватываем
@@ -142,6 +150,17 @@ def build_config(
         rules.append({"inbound": [PROBE_TAG], "outbound": PROXY_TAG})
     if bypass_lan:
         rules.append({"ip_is_private": True, "outbound": DIRECT_TAG})
+
+    # Сервисы Google проверяют страну и отказывают, если хоть часть запросов
+    # пришла из России. Поэтому их домены идут через VPN всегда — даже когда
+    # в туннель отправлены только отдельные программы.
+    if google_via_vpn:
+        from app.core.google import VPN_DOMAIN_SUFFIXES
+
+        rules.append({
+            "domain_suffix": list(VPN_DOMAIN_SUFFIXES),
+            "outbound": PROXY_TAG,
+        })
 
     if mode == MODE_ALL:
         final = PROXY_TAG
@@ -162,9 +181,21 @@ def build_config(
         "tag": "dns-remote",
         "server": dns_over_proxy,
     }
-    if dns_through_tunnel:
+    if dns_through_tunnel or google_via_vpn:
         remote_dns["detour"] = PROXY_TAG
     dns_final = "dns-remote" if dns_through_tunnel else "dns-local"
+
+    dns_rules: list[dict[str, Any]] = []
+    if google_via_vpn and not dns_through_tunnel:
+        # Имена Google спрашиваем через туннель: иначе провайдерский резолвер
+        # приводит нас на его же российские узлы, и страна снова «не та».
+        from app.core.google import VPN_DOMAIN_SUFFIXES
+
+        dns_rules.append({
+            "domain_suffix": list(VPN_DOMAIN_SUFFIXES),
+            "server": "dns-remote",
+        })
+    dns_rules.append({"query_type": ["A", "AAAA"], "server": dns_final})
 
     config: dict[str, Any] = {
         "log": {"level": log_level, "timestamp": True},
@@ -173,7 +204,7 @@ def build_config(
                 {"type": "local", "tag": "dns-local"},
                 remote_dns,
             ],
-            "rules": [{"query_type": ["A", "AAAA"], "server": dns_final}],
+            "rules": dns_rules,
             "final": dns_final,
             "strategy": "prefer_ipv4" if not ipv6 else "prefer_ipv6",
             "independent_cache": True,

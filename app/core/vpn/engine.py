@@ -51,6 +51,13 @@ class VpnError(RuntimeError):
     pass
 
 
+class VpnSuperseded(VpnError):
+    """Запуск отменён более свежим запросом.
+
+    Человеку об этом сообщать нечего: он сам только что нажал что-то ещё.
+    """
+
+
 def singbox_path() -> Path:
     """Рядом с exe в собранном виде, в payload — при запуске из исходников."""
     if paths.is_frozen():
@@ -110,6 +117,12 @@ class VpnEngine:
     def __init__(self) -> None:
         self._process: subprocess.Popen[bytes] | None = None
         self._lock = threading.RLock()
+        # Запуск и остановка — строго по одному за раз. Без этого два
+        # одновременных запуска (например, «сменил режим» и «отметил
+        # программу») убивали процессы друг друга и оставляли брошенный
+        # адаптер: со стороны выглядело как «VPN вообще перестал работать».
+        self._op_lock = threading.RLock()
+        self._request = 0
         self._secret = secrets.token_hex(16)
         self._port = 9797
         self._servers: list[Server] = []
@@ -179,6 +192,18 @@ class VpnEngine:
             return f"http://127.0.0.1:{self._probe_port}"
         return None
 
+    def local_proxy_url(self) -> str | None:
+        """Локальный вход движка в любом режиме.
+
+        В режиме «Прокси» это тот же прокси, что получает вся система, а в
+        режиме «Туннель» — служебный вход, который правилами всегда заведён
+        в VPN. Он нужен программам, которые ходят мимо системного прокси, —
+        например языковому серверу Antigravity на Go.
+        """
+        if self.status().running and self._probe_port:
+            return f"http://127.0.0.1:{self._probe_port}"
+        return None
+
     # --- наследство прошлого запуска -------------------------------------
 
     def restore_leftovers(self) -> list[str]:
@@ -186,6 +211,10 @@ class VpnEngine:
 
         Только своё. Возвращает список того, что пришлось чинить.
         """
+        with self._op_lock:
+            return self._restore_locked()
+
+    def _restore_locked(self) -> list[str]:
         fixed: list[str] = []
         try:
             if winapi.kill_processes_by_path(SINGBOX_EXE, str(singbox_path())):
@@ -205,7 +234,17 @@ class VpnEngine:
             logs.warn(f"Не удалось вернуть системный прокси: {exc}")
         return fixed
 
-    # --- запуск ----------------------------------------------------------
+    # --- запуск и очередь запросов ---------------------------------------
+
+    def _new_request(self) -> int:
+        """Каждый запрос получает номер: побеждает самый свежий."""
+        with self._lock:
+            self._request += 1
+            return self._request
+
+    def _superseded(self, token: int) -> bool:
+        with self._lock:
+            return token != self._request
 
     def start(
         self,
@@ -219,6 +258,7 @@ class VpnEngine:
     ) -> None:
         from app.core.config import config as settings
 
+        token = self._new_request()
         exe = singbox_path()
         if not exe.exists():
             raise VpnError(
@@ -232,6 +272,17 @@ class VpnEngine:
             transport = str(settings.get("vpn_transport", config_module.TRANSPORT_TUN))
         if transport not in config_module.TRANSPORT_LABELS:
             transport = config_module.TRANSPORT_TUN
+
+        # Режим «только выбранные», но никто не выбран — туннель поднимется и
+        # не сделает ровным счётом ничего. Честнее сказать это сразу.
+        if (transport == config_module.TRANSPORT_TUN
+                and mode == config_module.MODE_SELECTED
+                and not [name for name in (vpn_apps or []) if name]):
+            raise VpnError(
+                "Выбран режим «Только выбранные программы», но ни одна программа "
+                "не отмечена — через VPN не пойдёт ничего. Откройте «Программы VPN» "
+                "и отметьте нужные либо выберите «Весь трафик»."
+            )
 
         if transport == config_module.TRANSPORT_TUN:
             # Сначала про чужой туннель: это самая частая и самая понятная
@@ -248,7 +299,31 @@ class VpnEngine:
             if not winapi.is_admin():
                 raise VpnError("Нужны права администратора: VPN создаёт сетевой адаптер.")
 
-        self.stop(quiet=True)
+        # Дальше — по очереди: пока идёт чужой запуск, свой не начинаем.
+        # Иначе два запуска снимают процессы друг друга и дерутся за адаптер.
+        with self._op_lock:
+            if self._superseded(token):
+                logs.info("Запуск VPN отменён: пришёл более свежий запрос")
+                return
+            try:
+                self._start_queued(token, servers, selected, mode, vpn_apps,
+                                   direct_apps, stack, transport, settings)
+            except VpnSuperseded:
+                logs.info("Запуск VPN прерван: пришёл более свежий запрос")
+
+    def _start_queued(
+        self,
+        token: int,
+        servers: list[Server],
+        selected: str,
+        mode: str,
+        vpn_apps: list[str] | None,
+        direct_apps: list[str] | None,
+        stack: str,
+        transport: str,
+        settings,
+    ) -> None:
+        self._stop_locked(quiet=True)
 
         # Туннель на холодную нередко не встаёт с первой попытки: Windows долго
         # создаёт адаптер Wintun, а от прерванной попытки остаётся «повисший»
@@ -265,9 +340,11 @@ class VpnEngine:
                 if attempt:
                     time.sleep(1.5)
             try:
-                self._start_once(servers, selected, mode, vpn_apps, direct_apps,
-                                 stack, transport, settings)
+                self._start_once(token, servers, selected, mode, vpn_apps,
+                                 direct_apps, stack, transport, settings)
                 return
+            except VpnSuperseded:
+                raise
             except VpnError as exc:
                 last_error = str(exc)
                 if transport != config_module.TRANSPORT_TUN or not self._adapter_conflict():
@@ -276,7 +353,7 @@ class VpnEngine:
                     f"Туннель не поднялся ({last_error}); убираю свой адаптер "
                     "и пробую снова"
                 )
-        self.stop(quiet=True)
+        self._stop_locked(quiet=True)
         raise VpnError(
             (last_error + " Помогает перезагрузка компьютера.")
             if last_error else "VPN не поднялся."
@@ -292,6 +369,7 @@ class VpnEngine:
 
     def _start_once(
         self,
+        token: int,
         servers: list[Server],
         selected: str,
         mode: str,
@@ -325,6 +403,7 @@ class VpnEngine:
             probe_port=self._probe_port if transport == config_module.TRANSPORT_TUN else 0,
             transport=transport,
             proxy_port=proxy_port,
+            google_via_vpn=bool(settings.get("google_route_vpn", True)),
         )
         self.config_path.write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -371,6 +450,10 @@ class VpnEngine:
         deadline = time.time() + timeout
         notified_slow = False
         while time.time() < deadline:
+            if self._superseded(token):
+                # Человек уже нажал что-то ещё: сворачиваемся и уступаем.
+                self._abandon(process)
+                raise VpnSuperseded("Запуск VPN отменён.")
             if process.poll() is not None:
                 # Процесс умер — прибираем свой мусор, чтобы повтор начался с нуля.
                 winapi.kill_processes_by_path(SINGBOX_EXE, str(singbox_path()))
@@ -394,8 +477,24 @@ class VpnEngine:
                     )
             time.sleep(0.5)
 
-        self.stop(quiet=True)
+        self._stop_locked(quiet=True)
         raise VpnError(f"VPN не поднялся за {timeout} секунд. " + self._failure_reason())
+
+    def _abandon(self, process: subprocess.Popen[bytes]) -> None:
+        """Снять только что запущенный свой процесс, ничего больше не трогая."""
+        with self._lock:
+            if self._process is process:
+                self._process = None
+        if process.poll() is not None:
+            return
+        try:
+            process.terminate()
+            process.wait(timeout=8)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+            except OSError:
+                pass
 
     def _is_slow_interface(self) -> bool:
         text = " ".join(self._last_output[-12:]).lower()
@@ -527,6 +626,13 @@ class VpnEngine:
             self._notify()
 
     def stop(self, quiet: bool = False) -> None:
+        # Номер запроса прерывает чужой запуск: тот увидит, что его обогнали,
+        # свернётся сам и освободит очередь.
+        self._new_request()
+        with self._op_lock:
+            self._stop_locked(quiet=quiet)
+
+    def _stop_locked(self, quiet: bool = False) -> None:
         with self._lock:
             process = self._process
             self._process = None

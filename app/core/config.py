@@ -32,6 +32,10 @@ DEFAULTS: dict[str, Any] = {
     "last_update_check": 0,
     "skipped_core_version": "",
     "skipped_app_version": "",
+    # Напоминание о новой версии программы: показываем не чаще раза в сутки.
+    "update_notice_interval_hours": 24,
+    "last_update_notice": 0,
+    "notified_app_version": "",
     # Сеть
     "use_system_proxy": True,
     "custom_proxy": "",
@@ -67,7 +71,11 @@ DEFAULTS: dict[str, Any] = {
     "vpn_last_update": 0,
     "vpn_proxy_port": 10808,
     "vpn_proxy_backup": {},         # системный прокси до нас (режим «Прокси»)
+    # Google (Gemini, AI Studio, Antigravity)
+    "google_route_vpn": True,       # домены Google всегда через VPN
+    "google_launch_via_vpn": True,  # Antigravity запускать с нашим прокси
     # Прочее
+    "speedtest_last": {},           # последний замер скорости, чтобы не пустовало
     "first_run": True,
     "window_geometry": "",
     "diagnostics_autorun": True,

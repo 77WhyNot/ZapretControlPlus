@@ -440,8 +440,12 @@ class UpdatesPage(Page):
     # --- страница --------------------------------------------------------
 
     def check_silently(self) -> None:
-        """Тихая проверка при запуске приложения."""
-        self.check_core(manual=False)
+        """Тихая проверка: при запуске и потом раз в несколько часов."""
+        if config.get("check_core_updates", True):
+            self.check_core(manual=False)
+        else:
+            # Иначе следующая проверка сработает снова через минуту.
+            updater.mark_checked()
         if config.get("check_app_updates", True) and updater.running_from_installed_copy():
             self.check_app(manual=False)
 

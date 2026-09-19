@@ -118,7 +118,12 @@ class Engine:
 
     # --- запуск ----------------------------------------------------------
 
-    def start(self, strategy: Strategy, mode: str) -> None:
+    def start(self, strategy: Strategy, mode: str, quick: bool = False) -> None:
+        """quick — для автоподбора: не ждём лишнего и не трогаем драйвер.
+
+        При переборе стратегий запуск и остановка повторяются два десятка раз,
+        и каждая лишняя секунда превращается в полминуты ожидания.
+        """
         if not paths.core_is_valid():
             raise EngineError(
                 "Не найдено ядро zapret (bin\\winws.exe). "
@@ -129,18 +134,18 @@ class Engine:
                 "Нужны права администратора: WinDivert загружает драйвер режима ядра."
             )
 
-        self.stop(quiet=True)
+        self.stop(quiet=True, keep_driver=quick)
         winapi.enable_tcp_timestamps()
 
         if mode == MODE_SERVICE:
             self._start_service(strategy)
         else:
-            self._start_process(strategy)
+            self._start_process(strategy, quick=quick)
 
         self._started_at = time.time()
         self._notify()
 
-    def _start_process(self, strategy: Strategy) -> None:
+    def _start_process(self, strategy: Strategy, quick: bool = False) -> None:
         command = strategies.build_command_line(strategy)
         logs.info(f"Запуск процесса: стратегия «{strategy.title}»")
         startupinfo = subprocess.STARTUPINFO()
@@ -167,8 +172,13 @@ class Engine:
         )
         self._reader.start()
 
-        # Даём процессу мгновение упасть, если аргументы неверные.
-        time.sleep(1.2)
+        # Даём процессу мгновение упасть, если аргументы неверные. Ждём не
+        # «на всякий случай», а ровно до падения: живой winws стартует сразу.
+        deadline = time.time() + (0.5 if quick else 1.2)
+        while time.time() < deadline:
+            if process.poll() is not None:
+                break
+            time.sleep(0.1)
         if process.poll() is not None:
             with self._lock:
                 self._process = None
@@ -237,7 +247,13 @@ class Engine:
 
     # --- остановка -------------------------------------------------------
 
-    def stop(self, quiet: bool = False, remove_service: bool = True) -> None:
+    def stop(self, quiet: bool = False, remove_service: bool = True,
+             keep_driver: bool = False) -> None:
+        """keep_driver — не выгружать WinDivert: пригодится через секунду.
+
+        Выгрузка и повторная загрузка драйвера занимают больше времени, чем
+        сам запуск, а при автоподборе стратегия меняется каждые пару секунд.
+        """
         stopped_something = False
 
         with self._lock:
@@ -269,7 +285,8 @@ class Engine:
             stopped_something = True
             winapi.kill_processes(WINWS_EXE)
 
-        self._cleanup_windivert()
+        if not keep_driver:
+            self._cleanup_windivert()
         self._started_at = 0.0
 
         if stopped_something and not quiet:

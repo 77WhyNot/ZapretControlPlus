@@ -203,7 +203,8 @@ class StrategiesPage(Page):
 
         card.add(faint_label(
             "Программа выключит обход, посмотрит, какие адреса не открываются, "
-            "а затем по очереди проверит стратегии и оставит лучшую. "
+            "и прогонит стратегии в два захода: сначала быстро по нескольким "
+            "показательным адресам, затем лучших — по всему списку. "
             "Во время подбора связь будет прерываться — это нормально."
         ))
 
@@ -269,8 +270,11 @@ class StrategiesPage(Page):
                 candidates,
                 blocked,
                 mode=MODE_PROCESS,
-                on_progress=lambda index, total, strategy: worker.progress.emit(
-                    f"[{index}/{total}] {strategy.title}", index
+                on_progress=lambda index, total, strategy, stage: worker.progress.emit(
+                    f"[{index}/{total}] {strategy.title}"
+                    if stage == autotest.STAGE_QUICK
+                    else f"Полная проверка: {strategy.title}",
+                    index,
                 ),
             )
             return {"blocked": blocked, "scores": scores, "baseline": baseline}
@@ -357,6 +361,8 @@ class StrategiesPage(Page):
             layout.addWidget(faint_label("не запустилась"))
         else:
             layout.addWidget(Badge(f"{score.passed} из {score.total}", kind))
+            if score.stage == autotest.STAGE_QUICK:
+                layout.addWidget(Badge("быстрая проверка", "neutral"))
             if score.latency_ms:
                 layout.addWidget(faint_label(f"{score.latency_ms:.0f} мс"))
         layout.addStretch(1)

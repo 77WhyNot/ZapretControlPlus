@@ -191,6 +191,21 @@ class VpnAppsPage(Page):
         self.banner_proxy.action.clicked.connect(lambda: self.context.navigate.emit("vpn"))
         card.add(self.banner_proxy)
         self.banner_proxy.setVisible(False)
+
+        # Самая частая причина «VPN включён, а толку ноль»: режим «только
+        # выбранные», а не выбрано ничего.
+        self.banner_empty = Banner(
+            self.context, "warning",
+            "Ни одна программа не отмечена — в режиме «Только выбранные» через "
+            "VPN не пойдёт ничего. Отметьте программы ниже или переключитесь "
+            "на «Весь трафик».",
+            kind="warn", action_text="Весь трафик",
+        )
+        self.banner_empty.action.clicked.connect(
+            lambda: self._set_mode(vpn_config.MODE_ALL)
+        )
+        card.add(self.banner_empty)
+        self.banner_empty.setVisible(False)
         self.body.addWidget(card)
 
     def _current_mode(self) -> str:
@@ -203,7 +218,9 @@ class VpnAppsPage(Page):
         self._reload_cards()
         self._update_summary()
         self.context.ok(f"Режим: {vpn_config.MODE_LABELS[mode]}")
-        self._restart_if_running("Режим маршрутизации изменён")
+        # Через паузу, как и отметки программ: человек часто меняет режим и
+        # сразу отмечает программы — незачем поднимать туннель дважды.
+        self._schedule_restart("Режим маршрутизации изменён")
 
     def _sync_mode(self) -> None:
         mode = self._current_mode()
@@ -268,6 +285,7 @@ class VpnAppsPage(Page):
             self.summary_text.setText(f"Мимо туннеля: {apps_module.describe(names)}")
         else:
             self.summary_text.setText(f"Через туннель: {apps_module.describe(names)}")
+        self.banner_empty.setVisible(mode == vpn_config.MODE_SELECTED and not names)
 
         from app.core.vpn.engine import vpn_engine
 
@@ -369,9 +387,24 @@ class VpnAppsPage(Page):
         """Правила читаются движком только при запуске — перезапускаем сами."""
         from app.ui import vpn_actions
 
-        if getattr(self, "_restart_worker", None) is not None                 and self._restart_worker.busy():
-            return
-        self._restart_worker = vpn_actions.restart_if_running(self, self.context, reason)
+        self._restart_worker = vpn_actions.restart_if_running(
+            self, self.context, reason
+        )
+
+    def _schedule_restart(self, reason: str) -> None:
+        """Отложенный перезапуск: щелчков подряд бывает много, туннель один."""
+        self._restart_reason = reason
+        timer = getattr(self, "_apply_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(
+                lambda: self._restart_if_running(
+                    getattr(self, "_restart_reason", "Правила изменены")
+                )
+            )
+            self._apply_timer = timer
+        timer.start(2500)
 
     def _on_card_toggled(self, process: str, active: bool) -> None:
         key = self._storage_key()
@@ -384,15 +417,7 @@ class VpnAppsPage(Page):
         config.set(key, apps_module.normalize(names))
         self._update_summary()
         # Отложенно: человек часто щёлкает несколько программ подряд.
-        timer = getattr(self, "_apply_timer", None)
-        if timer is None:
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.timeout.connect(
-                lambda: self._restart_if_running("Список программ изменён")
-            )
-            self._apply_timer = timer
-        timer.start(2500)
+        self._schedule_restart("Список программ изменён")
 
     def _filter(self, text: str) -> None:
         needle = text.strip().lower()
