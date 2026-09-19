@@ -17,6 +17,7 @@ class AppContext(QObject):
     status_changed = Signal(object)
     strategies_changed = Signal()
     tunnels_changed = Signal(object)   # список чужих VPN-туннелей
+    foreign_vpn_changed = Signal(object)  # туннели и клиенты-процессы чужих VPN
     tgws_changed = Signal(object)      # состояние WebSocket-прокси Telegram
     vpn_status_changed = Signal(object)
     servers_changed = Signal()
@@ -32,6 +33,7 @@ class AppContext(QObject):
         )
         self._status = engine.status()
         self._tunnels: list[str] = []
+        self._foreign: list[str] = []
         self._tgws = None
         self._tgws_key: tuple = ()
         self._vpn = None
@@ -86,6 +88,24 @@ class AppContext(QObject):
         if force or found != self._tunnels:
             self._tunnels = found
             self.tunnels_changed.emit(list(found))
+        return list(found)
+
+    @property
+    def foreign_vpn(self) -> list[str]:
+        """Любой сторонний VPN: туннель или клиент, работающий как прокси."""
+        return list(self._foreign)
+
+    def refresh_foreign_vpn(self, force: bool = False) -> list[str]:
+        from app.core import netadapters
+        from app.core.vpn.engine import singbox_path
+
+        try:
+            found = netadapters.foreign_vpn_names(str(singbox_path()))
+        except Exception:  # noqa: BLE001 — проверка не должна ронять окно
+            found = list(self._foreign)
+        if force or found != self._foreign:
+            self._foreign = found
+            self.foreign_vpn_changed.emit(list(found))
         return list(found)
 
     # --- Telegram через WebSocket -----------------------------------------

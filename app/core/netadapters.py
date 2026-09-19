@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from app.core import logs, winapi
@@ -141,3 +142,78 @@ def active_tunnels() -> list[Tunnel]:
 def tunnel_names() -> list[str]:
     """Понятные названия живых туннелей без повторов."""
     return list(dict.fromkeys(tunnel.title for tunnel in active_tunnels()))
+
+
+# Клиенты VPN, которые могут работать и без своего адаптера — в режиме
+# системного прокси (Happ, v2rayN и подобные). По адаптерам их не видно,
+# поэтому смотрим ещё и на процессы.
+VPN_CLIENTS = {
+    "happ.exe": "Happ",
+    "hiddify.exe": "Hiddify",
+    "hiddifynext.exe": "Hiddify",
+    "v2rayn.exe": "v2rayN",
+    "nekoray.exe": "NekoRay",
+    "nekobox.exe": "NekoBox",
+    "throne.exe": "Throne",
+    "clash-verge.exe": "Clash Verge",
+    "clash verge.exe": "Clash Verge",
+    "verge-mihomo.exe": "Clash Verge",
+    "mihomo-party.exe": "Mihomo Party",
+    "flclash.exe": "FlClash",
+    "outline.exe": "Outline",
+    "amneziavpn.exe": "AmneziaVPN",
+    "wireguard.exe": "WireGuard",
+    "openvpn-gui.exe": "OpenVPN",
+    "openvpnconnect.exe": "OpenVPN",
+    "protonvpn.exe": "Proton VPN",
+    "protonvpn.client.exe": "Proton VPN",
+    "nordvpn.exe": "NordVPN",
+    "expressvpn.exe": "ExpressVPN",
+    "windscribe.exe": "Windscribe",
+    "psiphon3.exe": "Psiphon",
+    "adguardvpn.exe": "AdGuard VPN",
+    "planetvpn.exe": "Planet VPN",
+    "warp-svc.exe": "Cloudflare WARP",
+}
+
+# Движки, на которых построены многие клиенты. Наш sing-box отсеивается
+# по пути к файлу — см. foreign_vpn_names.
+VPN_ENGINES = {"sing-box.exe": "sing-box", "xray.exe": "Xray",
+               "v2ray.exe": "V2Ray", "mihomo.exe": "Mihomo"}
+
+
+def running_vpn_clients(own_engine: str = "") -> list[str]:
+    """Запущенные сторонние VPN-клиенты, даже если туннеля у них нет."""
+    own = os.path.normcase(os.path.abspath(own_engine)) if own_engine else ""
+    found: list[str] = []
+    for pid, name in winapi.iter_processes():
+        low = name.lower()
+        title = VPN_CLIENTS.get(low)
+        if title is None and low in VPN_ENGINES:
+            path = winapi.process_path(pid)
+            # Путь не прочитался — не гадаем: это может быть и наш движок.
+            if not path or (own and os.path.normcase(os.path.abspath(path)) == own):
+                continue
+            title = VPN_ENGINES[low]
+        if title:
+            found.append(title)
+    return list(dict.fromkeys(found))
+
+
+def foreign_vpn_names(own_engine: str = "") -> list[str]:
+    """Всё стороннее, что похоже на VPN: туннели и клиенты-процессы.
+
+    Для плашки «обнаружен другой VPN». Движок-клиента (sing-box, Xray) без
+    окна показываем, только если рядом не нашлось самого клиента: Happ
+    внутри себя и есть sing-box, дублировать его незачем.
+    """
+    names = tunnel_names()
+    clients = running_vpn_clients(own_engine)
+    engines = set(VPN_ENGINES.values())
+    has_client = any(name not in engines for name in clients)
+    for name in clients:
+        if name in engines and (has_client or names):
+            continue
+        if name not in names:
+            names.append(name)
+    return names

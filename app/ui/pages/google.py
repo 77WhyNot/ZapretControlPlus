@@ -49,8 +49,8 @@ class GooglePage(Page):
         self._check_worker: Worker | None = None
         self._launch_worker: Worker | None = None
 
-        self._build_antigravity()
         self._build_route()
+        self._build_antigravity()
         self._build_check()
         self._build_account()
         self.apply_theme()
@@ -218,27 +218,115 @@ class GooglePage(Page):
     # --- маршрут -----------------------------------------------------------
 
     def _build_route(self) -> None:
-        card = Card(padding=20, spacing=12)
-        card.add(section_label("Маршрут для сервисов Google"))
+        from PySide6.QtWidgets import QComboBox
 
+        card = Card(padding=20, spacing=12)
+        card.add(section_label("Как пускать Gemini и Antigravity"))
+        card.add(muted_label(
+            "Google определяет страну по своей базе адресов — и адреса многих VPN "
+            "считает российскими, даже «США» и «Германию». Тогда через VPN он "
+            "отвечает «User location is not supported». У прокси Smart DNS "
+            "адреса чистые: программа отправляет Gemini, AI Studio и серверы "
+            "Antigravity через такой прокси, а всё остальное — как раньше."
+        ))
+
+        self.route_box = QComboBox()
+        self.route_box.addItem("Через прокси Smart DNS — рекомендуется", "smartdns")
+        self.route_box.addItem("Через VPN", "vpn")
+        self.route_box.currentIndexChanged.connect(self._route_changed)
+        card.add(SettingRow("Путь", "Меняется сразу, VPN перезапустится сам.",
+                            self.route_box))
+
+        self.service_box = QComboBox()
+        for key, (title, _urls) in google.SMART_DNS.items():
+            self.service_box.addItem(title, key)
+        self.service_box.currentIndexChanged.connect(self._service_changed)
+        card.add(SettingRow(
+            "Сервис Smart DNS",
+            "Чей прокси использовать. Если один перестал пускать — выберите другой.",
+            self.service_box,
+        ))
+
+        proxy_row = QHBoxLayout()
+        proxy_row.setSpacing(10)
+        self.proxy_status = faint_label("")
+        proxy_row.addWidget(self.proxy_status, 1)
+        self.proxy_spinner = Spinner(16, self.context.color("accent"))
+        proxy_row.addWidget(self.proxy_spinner)
+        self.btn_proxy = Button("Найти прокси заново", variant="ghost")
+        self.btn_proxy.clicked.connect(lambda: self._refresh_proxy(force=True))
+        proxy_row.addWidget(self.btn_proxy)
+        card.add_layout(proxy_row)
+
+        card.add(Divider())
         self.switch_route = Switch(bool(config.get("google_route_vpn", True)))
         self.switch_route.toggled.connect(self._toggle_route)
         card.add(SettingRow(
-            "Google всегда через VPN",
-            "Домены Gemini, AI Studio, Antigravity и googleapis.com идут через "
-            "туннель в любом режиме — даже если в VPN отправлены только "
-            "отдельные программы. Имена этих сайтов тоже спрашиваются через "
-            "туннель, иначе провайдер приводит нас на российские узлы Google. "
-            "YouTube и остальной Google это не затрагивает.",
+            "Остальной Google API — через VPN",
+            "Прочие адреса googleapis.com идут через туннель в любом режиме. "
+            "YouTube и почту это не затрагивает.",
             self.switch_route,
         ))
-        card.add(Divider())
-        card.add(faint_label(
-            "Smart DNS на вкладке «Smart DNS» отвечает за имена Xbox и другие "
-            "сервисы — с этим переключателем он не спорит: для доменов Google "
-            "имя берётся через VPN, остальное остаётся как было."
-        ))
         self.body.addWidget(card)
+        self._sync_route()
+
+    def _sync_route(self) -> None:
+        for box, key, fallback in ((self.route_box, "google_route", "smartdns"),
+                                   (self.service_box, "google_smartdns", "xbox")):
+            box.blockSignals(True)
+            index = box.findData(str(config.get(key, fallback)))
+            if index >= 0:
+                box.setCurrentIndex(index)
+            box.blockSignals(False)
+        smart = str(config.get("google_route", "smartdns")) == "smartdns"
+        self.service_box.setEnabled(smart)
+        self.btn_proxy.setEnabled(smart)
+        cached = config.get("google_proxy", {}) or {}
+        if not smart:
+            self.proxy_status.setText("Gemini и Antigravity идут через VPN.")
+        elif isinstance(cached, dict) and cached.get("ip"):
+            self.proxy_status.setText(
+                f"Прокси {cached['ip']} · пропускает {len(cached.get('hosts') or [])} "
+                f"адресов Google из {len(google.AI_HOSTS)}"
+            )
+        else:
+            self.proxy_status.setText("Прокси ещё не найден — нажмите «Найти прокси заново».")
+
+    def _route_changed(self) -> None:
+        config.set("google_route", str(self.route_box.currentData()))
+        self._sync_route()
+        self._restart_vpn("Путь для Google изменён")
+
+    def _service_changed(self) -> None:
+        config.set("google_smartdns", str(self.service_box.currentData()))
+        self._refresh_proxy(force=True)
+
+    def _refresh_proxy(self, force: bool = False) -> None:
+        self.btn_proxy.setEnabled(False)
+        self.proxy_spinner.start()
+        self.proxy_status.setText("Ищу прокси и проверяю, какие адреса он пропускает…")
+
+        def done(result=None, error: str = "") -> None:
+            self.proxy_spinner.stop()
+            self._sync_route()
+            if error:
+                self.context.error(f"Прокси не найден: {error}")
+            elif result and result[0]:
+                self.context.ok(f"Прокси найден: {result[0]}")
+                self._restart_vpn("Прокси для Google обновлён")
+            else:
+                self.context.warn("Сервис сейчас не отдаёт прокси — попробуйте другой.")
+
+        worker = Worker(self)
+        worker.finished.connect(lambda result: done(result))
+        worker.failed.connect(lambda message: done(error=message))
+        worker.run(google.smartdns_route, force)
+        self._proxy_worker = worker
+
+    def _restart_vpn(self, reason: str) -> None:
+        from app.ui import vpn_actions
+
+        self._route_worker = vpn_actions.restart_if_running(self, self.context, reason)
 
     def _toggle_route(self, value: bool) -> None:
         config.set("google_route_vpn", value)
@@ -261,6 +349,9 @@ class GooglePage(Page):
         header.addStretch(1)
         self.check_spinner = Spinner(16, self.context.color("accent"))
         header.addWidget(self.check_spinner)
+        self.btn_scan = Button("Проверить все серверы", variant="ghost")
+        self.btn_scan.clicked.connect(self._scan_servers)
+        header.addWidget(self.btn_scan)
         self.btn_check = Button("Проверить Google", variant="primary")
         self.btn_check.clicked.connect(self._run_check)
         header.addWidget(self.btn_check)
@@ -303,18 +394,72 @@ class GooglePage(Page):
                    bool(config.get("vpn_ipv6", False)))
         self._check_worker = worker
 
+    def _scan_servers(self) -> None:
+        """Какую страну Google видит у каждого сервера подписки."""
+        servers = self.context.servers()
+        if not servers:
+            self.context.warn("Сначала добавьте подписку на вкладке «VPN».")
+            return
+        if self._check_worker is not None and self._check_worker.busy():
+            return
+        clear_layout(self.check_layout)
+        self.check_verdict.setVisible(False)
+        self.btn_scan.setEnabled(False)
+        self.btn_check.setEnabled(False)
+        self.check_spinner.start()
+        self.context.ok(f"Проверяю {len(servers)} серверов — это около полуминуты.")
+
+        worker = Worker(self)
+        worker.finished.connect(self._scan_ready)
+        worker.failed.connect(self._check_failed)
+        worker.run(google.scan_servers, servers)
+        self._check_worker = worker
+
+    def _scan_ready(self, rows) -> None:
+        self.btn_scan.setEnabled(True)
+        self.btn_check.setEnabled(True)
+        self.check_spinner.stop()
+        clear_layout(self.check_layout)
+        good = 0
+        for name, ip_country, google_view in rows:
+            ok = bool(google_view) and google_view not in google.UNSUPPORTED_COUNTRIES
+            good += ok
+            note = (f"Google видит: {google_view or 'не ответил'}"
+                    + (f" · по адресу: {ip_country}" if ip_country else ""))
+            self.check_layout.addWidget(self._line(ok, name, note))
+        if not rows:
+            self.check_verdict.set_kind("warn")
+            self.check_verdict.set_text("Не удалось проверить серверы.")
+        elif good:
+            self.check_verdict.set_kind("ok")
+            self.check_verdict.set_text(
+                f"Серверов, которые Google не считает российскими: {good} из "
+                f"{len(rows)}. Выберите такой сервер — или оставьте путь через "
+                "прокси Smart DNS, он от сервера не зависит."
+            )
+        else:
+            self.check_verdict.set_kind("warn")
+            self.check_verdict.set_text(
+                "Все серверы этой подписки Google считает российскими — через "
+                "них Gemini и Antigravity не заработают. Нужен путь «Через "
+                "прокси Smart DNS» выше."
+            )
+        self.check_verdict.setVisible(True)
+
     def _check_failed(self, message: str) -> None:
+        self.btn_scan.setEnabled(True)
         self.btn_check.setEnabled(True)
         self.check_spinner.stop()
         self.context.error(f"Проверка не прошла: {message}")
 
     def _check_ready(self, result: google.GoogleCheck) -> None:
         self.btn_check.setEnabled(True)
+        self.btn_scan.setEnabled(True)
         self.check_spinner.stop()
         clear_layout(self.check_layout)
 
         self.check_layout.addWidget(self._line(
-            result.country_ok is True,
+            result.country_ok is not False,
             f"Выход VPN{(': ' + result.exit_ip) if result.exit_ip else ''}",
             result.country_note,
         ))
@@ -400,6 +545,7 @@ class GooglePage(Page):
 
     def on_activate(self) -> None:
         self._sync_antigravity()
+        self._sync_route()
         self.switch_route.setChecked(
             bool(config.get("google_route_vpn", True)), animate=False
         )
@@ -408,6 +554,7 @@ class GooglePage(Page):
         accent = self.context.color("accent")
         self.ag_icon.set_color(accent)
         self.check_spinner.set_color(accent)
+        self.proxy_spinner.set_color(accent)
         for switch in (self.switch_route,):
             switch.set_colors(accent, self.context.color("border_strong"),
                               self.context.color("surface"))

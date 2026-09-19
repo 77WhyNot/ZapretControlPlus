@@ -285,8 +285,10 @@ class GoogleCheck:
     # Выход VPN: какой адрес и какую страну видит мир через туннель.
     exit_ip: str = ""
     exit_country: str = ""
+    google_country: str = ""     # страна выхода VPN по базе самого Google
     country_ok: bool | None = None
     country_note: str = ""
+    smartdns: bool = False       # Gemini и Antigravity идут через прокси Smart DNS
     # Каким путём движок на деле пускает запросы к серверам Google — тем,
     # которым ходит языковой сервер Antigravity. None — VPN выключен.
     route_ok: bool | None = None
@@ -319,9 +321,13 @@ def _exit_country(proxy_url: str | None) -> tuple[str, str]:
         session.close()
 
 
-def _route_to_google(timeout: float = 8.0) -> tuple[bool | None, str]:
+def _route_to_google(timeout: float = 8.0,
+                     proxy_ip: str = "") -> tuple[bool | None, str]:
     """Открыть соединение к googleapis.com так, как это делает программа на Go,
     — без всякого прокси, — и спросить у движка, каким выходом он его пустил.
+
+    proxy_ip — адрес прокси Smart DNS, если Google пускается через него: тогда
+    выход «direct» на этот адрес и есть правильный путь.
     """
     from app.core.vpn.engine import vpn_engine
 
@@ -337,6 +343,7 @@ def _route_to_google(timeout: float = 8.0) -> tuple[bool | None, str]:
         with context.wrap_socket(raw, server_hostname=ROUTE_PROBE_HOST) as tls:
             local_port = tls.getsockname()[1]
             chain: list[str] | None = None
+            destination = ""
             for _ in range(6):
                 for item in vpn_engine.active_connections():
                     meta = item.get("metadata") or {}
@@ -344,6 +351,7 @@ def _route_to_google(timeout: float = 8.0) -> tuple[bool | None, str]:
                     port = str(meta.get("sourcePort") or "")
                     if host == ROUTE_PROBE_HOST and port == str(local_port):
                         chain = [str(part) for part in item.get("chains") or []]
+                        destination = str(meta.get("destinationIP") or "")
                         break
                 if chain is not None:
                     break
@@ -355,6 +363,10 @@ def _route_to_google(timeout: float = 8.0) -> tuple[bool | None, str]:
         # Движок соединения не видел — значит, оно прошло мимо него.
         return False, ("Запросы к Google идут мимо VPN: движок их даже не видит. "
                        "Так ходят программы, не читающие системный прокси.")
+    if chain and chain[0] == "direct" and proxy_ip:
+        if destination in ("", proxy_ip):
+            return True, f"Запросы к Google идут через прокси Smart DNS ({proxy_ip})."
+        return False, "Запрос к Google ушёл напрямую, но не на прокси Smart DNS."
     if not chain or chain[0] == "direct":
         return False, "Движок пустил запрос к Google напрямую, мимо VPN."
     return True, f"Запросы к Google идут через VPN (сервер «{chain[0]}»)."
@@ -386,29 +398,49 @@ def check(proxy_url: str | None = None, vpn_running: bool = False,
     """Каким путём запросы к Google уходят на самом деле и что видит Google.
 
     Протечь может любой путь: программа мимо системного прокси, программа не
-    из списка «выбранных», IPv6. Проверяем все.
+    из списка «выбранных», IPv6. А ещё Google может считать сам выход VPN
+    российским — это видно только по его собственной базе адресов.
     """
+    from app.core.config import config
     from app.core.vpn.engine import vpn_engine
 
     result = GoogleCheck()
+    proxy_ip = ""
+    if str(config.get("google_route", "smartdns")) == "smartdns":
+        cached = config.get("google_proxy", {}) or {}
+        if isinstance(cached, dict) and ROUTE_PROBE_HOST in (cached.get("hosts") or []):
+            proxy_ip = str(cached.get("ip") or "")
+    result.smartdns = bool(proxy_ip)
 
     # Выход VPN берём через служебный вход движка: он всегда заведён в туннель.
     local = vpn_engine.local_proxy_url() if vpn_running else None
     result.exit_ip, result.exit_country = _exit_country(local)
+    result.google_country = google_country(local) if vpn_running else ""
     if not vpn_running:
         result.country_ok = None
         result.country_note = "VPN выключен."
-    elif not result.exit_country:
-        result.country_note = "Не удалось узнать страну выхода VPN."
+    elif result.google_country and result.google_country in UNSUPPORTED_COUNTRIES:
+        result.country_ok = False
+        result.country_note = (
+            f"По базе Google выход VPN — {result.google_country}"
+            + (f", хотя сервер в {result.exit_country}" if result.exit_country
+               and result.exit_country != result.google_country else "")
+            + ". Через такой выход Gemini и Antigravity не пускают."
+        )
     elif result.exit_country.upper() in UNSUPPORTED_COUNTRIES:
         result.country_ok = False
         result.country_note = (f"Выход VPN — {result.exit_country}: там Gemini и "
                                "Antigravity Google не обслуживает.")
-    else:
+    elif result.google_country or result.exit_country:
         result.country_ok = True
-        result.country_note = f"Выход VPN — {result.exit_country}, Google её обслуживает."
+        result.country_note = (
+            f"По базе Google выход VPN — {result.google_country or result.exit_country}, "
+            "эту страну Google обслуживает."
+        )
+    else:
+        result.country_note = "Не удалось узнать страну выхода VPN."
 
-    result.route_ok, result.route_note = _route_to_google()
+    result.route_ok, result.route_note = _route_to_google(proxy_ip=proxy_ip)
     result.ipv6_ok, result.ipv6_note = _ipv6_to_google(tunnel_ipv6)
 
     session = _session(proxy_url)
@@ -433,25 +465,265 @@ def _verdict(result: GoogleCheck, vpn_running: bool, transport: str) -> tuple[st
     if not vpn_running:
         return ("VPN выключен — Google видит российский адрес и отвечает «User "
                 "location is not supported». Включите VPN.", False)
-    if result.country_ok is False:
-        return ("VPN выходит в стране, которую Google не обслуживает. Смените "
-                "сервер — подойдут Латвия, Нидерланды, Германия, Швеция, США.", False)
     if result.route_ok is False:
         if transport == "proxy":
-            return ("Браузер ходит через VPN, а программы, которые не читают "
+            return ("Браузер ходит как надо, а программы, которые не читают "
                     "системный прокси, — напрямую. Среди них языковой сервер "
                     "Antigravity: запускайте его кнопкой «Запустить через VPN» или "
                     "переключите VPN на «Туннель».", False)
-        return ("Запросы к Google идут мимо VPN. Включите «Google всегда через "
-                "VPN» ниже — или отправьте в туннель весь трафик.", False)
+        return ("Запросы к Google идут мимо нужного пути. Перезапустите VPN — "
+                "правила применятся заново.", False)
+    if result.smartdns and result.route_ok:
+        if result.ipv6_ok is False:
+            return ("Запросы по IPv6 идут мимо туннеля. Перезапустите VPN: новая "
+                    "версия больше не раздаёт IPv6-адреса.", False)
+        return ("Gemini и Antigravity идут через прокси Smart DNS — у него адрес, "
+                "который Google не считает российским. Если Antigravity всё равно "
+                "отказывает, нажмите «Почему не работает»: дело, скорее всего, в "
+                "стране самого аккаунта.", True)
+    if result.country_ok is False:
+        return ("Google считает выход вашего VPN российским — через него Gemini и "
+                "Antigravity не заработают, какой сервер ни выбирай у этой "
+                "подписки. Выберите путь «Через прокси Smart DNS» выше.", False)
     if result.ipv6_ok is False:
         return ("Запросы по IPv6 идут мимо туннеля. Перезапустите VPN: новая "
                 "версия больше не раздаёт IPv6-адреса, и всё пойдёт через туннель.",
                 False)
-    return ("Сеть в порядке: запросы к Google идут через VPN, страна выхода "
-            "подходит, утечек нет. Если Antigravity всё равно отказывает — "
-            "нажмите «Почему не работает»: скорее всего, дело в стране аккаунта.",
-            True)
+    return ("Сеть в порядке: запросы к Google идут через VPN, и Google видит "
+            "подходящую страну. Если Antigravity всё равно отказывает — нажмите "
+            "«Почему не работает»: скорее всего, дело в стране аккаунта.", True)
+
+
+# --- Google через прокси Smart DNS ----------------------------------------
+#
+# Главная беда: Google по своей базе считает адреса многих VPN российскими —
+# у некоторых подписок все серверы подряд, включая «США» и «Германию». Тогда
+# через VPN Gemini и Antigravity отвечают «User location is not supported»,
+# и маршрут тут бессилен. Сервисы Smart DNS (Xbox DNS, Comss) держат свои
+# прокси с «чистыми» для Google адресами: подключаемся к такому прокси, а в
+# TLS называем нужный сайт — прокси передаёт соединение Google как есть,
+# шифрование не вскрывается.
+
+# Хосты, которые Google проверяет по стране. Кроме них ничего на прокси не
+# отправляем: остальному Google (почта, YouTube) это не нужно.
+AI_HOSTS: tuple[str, ...] = (
+    "gemini.google.com",
+    "aistudio.google.com",
+    "generativelanguage.googleapis.com",
+    "alkalimakersuite-pa.clients6.google.com",
+    "cloudcode-pa.googleapis.com",
+    "daily-cloudcode-pa.googleapis.com",
+    "antigravity.google",
+    "antigravity-unleash.goog",
+    "notebooklm.google.com",
+)
+
+SMART_DNS = {
+    "xbox": ("Xbox DNS", ("https://xbox-dns.ru/dns-query",
+                          "https://111.88.96.50/dns-query")),
+    "comss": ("Comss DNS", ("https://dns.comss.one/dns-query",)),
+}
+PROXY_MAX_AGE = 12 * 3600
+
+
+def _doh_a(urls: tuple[str, ...], name: str) -> str:
+    """Один A-запрос по DoH: так ответ не перехватывает наш же туннель."""
+    import base64
+    import struct
+
+    header = struct.pack(">HHHHHH", 0, 0x0100, 1, 0, 0, 0)
+    qname = b"".join(bytes([len(part)]) + part.encode() for part in name.split("."))
+    packet = header + qname + b"\0" + struct.pack(">HH", 1, 1)
+    encoded = base64.urlsafe_b64encode(packet).rstrip(b"=").decode()
+    session = _session(None)
+    try:
+        for url in urls:
+            try:
+                response = session.get(
+                    url, params={"dns": encoded}, timeout=8,
+                    headers={"accept": "application/dns-message"},
+                    # По голому IP сертификат на имя не сойдётся — это запасной путь.
+                    verify=not url.startswith("https://111."),
+                )
+            except requests.RequestException:
+                continue
+            if response.status_code != 200:
+                continue
+            data = response.content
+            count = struct.unpack(">H", data[6:8])[0]
+            offset = 12
+            while data[offset]:
+                offset += data[offset] + 1
+            offset += 5
+            for _ in range(count):
+                if data[offset] & 0xC0 == 0xC0:
+                    offset += 2
+                else:
+                    while data[offset]:
+                        offset += data[offset] + 1
+                    offset += 1
+                rtype, _cls, _ttl, length = struct.unpack(">HHIH", data[offset:offset + 10])
+                offset += 10
+                if rtype == 1 and length == 4:
+                    return socket.inet_ntoa(data[offset:offset + 4])
+                offset += length
+    finally:
+        session.close()
+    return ""
+
+
+def _passes(proxy_ip: str, host: str, timeout: float = 6.0) -> bool:
+    """Пропускает ли прокси этот хост: настоящий сертификат Google и ответ."""
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((proxy_ip, 443), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                tls.sendall(f"HEAD / HTTP/1.1\r\nHost: {host}\r\n"
+                            "Connection: close\r\n\r\n".encode())
+                return tls.recv(16).startswith(b"HTTP/")
+    except (OSError, ssl.SSLError):
+        return False
+
+
+def discover_proxy(service: str) -> tuple[str, list[str]]:
+    """Адрес прокси сервиса и хосты, которые он действительно пропускает."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    title, urls = SMART_DNS.get(service, SMART_DNS["xbox"])
+    proxy_ip = _doh_a(urls, "gemini.google.com")
+    if not proxy_ip or proxy_ip.startswith(("142.", "172.217.", "216.239.", "74.125.")):
+        # Сервис ответил адресом самого Google — прокси у него сейчас нет.
+        logs.warn(f"{title}: прокси для Google не найден")
+        return "", []
+    with ThreadPoolExecutor(max_workers=len(AI_HOSTS)) as pool:
+        results = list(pool.map(lambda host: (host, _passes(proxy_ip, host)), AI_HOSTS))
+    hosts = [host for host, ok in results if ok]
+    logs.info(f"{title}: прокси {proxy_ip}, пропускает {len(hosts)} из {len(AI_HOSTS)}")
+    return proxy_ip, hosts
+
+
+def smartdns_route(force: bool = False) -> tuple[str, list[str]]:
+    """Прокси для маршрута Google — из кэша, если он свежий.
+
+    Пустой адрес — путь выключен или прокси сейчас недоступен; тогда Google
+    идёт общим правилом, через VPN.
+    """
+    from app.core.config import config
+
+    if str(config.get("google_route", "smartdns")) != "smartdns":
+        return "", []
+    service = str(config.get("google_smartdns", "xbox"))
+    cached = config.get("google_proxy", {}) or {}
+    fresh = (isinstance(cached, dict) and cached.get("service") == service
+             and cached.get("ip") and time.time() - float(cached.get("time", 0))
+             < PROXY_MAX_AGE)
+    if fresh and not force:
+        return str(cached["ip"]), list(cached.get("hosts") or [])
+    proxy_ip, hosts = discover_proxy(service)
+    if proxy_ip and hosts:
+        config.set("google_proxy", {"service": service, "ip": proxy_ip,
+                                    "hosts": hosts, "time": int(time.time())})
+        return proxy_ip, hosts
+    # Сеть моргнула — лучше вчерашний адрес, чем никакого.
+    if isinstance(cached, dict) and cached.get("service") == service and cached.get("ip"):
+        return str(cached["ip"]), list(cached.get("hosts") or [])
+    return "", []
+
+
+def google_country(proxy_url: str | None, timeout: float = 20.0) -> str:
+    """Какую страну Google видит для этого пути — по его собственной базе.
+
+    YouTube вшивает в страницу код страны, определённый Google по адресу
+    ("GL":"XX"). Это та же база, по которой Google решает, пускать ли в
+    Gemini и Antigravity. Сервис ipinfo может говорить «Латвия», а Google
+    при этом видеть Россию — именно это и ломает Antigravity через VPN.
+    """
+    session = _session(proxy_url)
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "Chrome/126 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.8",
+    })
+    pattern = re.compile(rb'"GL":"([A-Z]{2})"')
+    try:
+        response = session.get("https://www.youtube.com/", timeout=timeout, stream=True)
+        buffer = b""
+        for chunk in response.iter_content(65536):
+            buffer += chunk
+            found = pattern.search(buffer)
+            if found:
+                response.close()
+                return found.group(1).decode()
+            if len(buffer) > 3_000_000:
+                break
+        response.close()
+    except requests.RequestException:
+        return ""
+    finally:
+        session.close()
+    return ""
+
+
+def scan_servers(servers: list) -> list[tuple[str, str, str]]:
+    """Какую страну Google видит у каждого сервера подписки.
+
+    Поднимаем отдельный sing-box: по локальному входу на каждый сервер, без
+    TUN и без Clash API, — рабочий туннель не трогается. Возвращает
+    (сервер, страна по ipinfo, страна по мнению Google).
+    """
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.core import paths
+    from app.core.vpn.engine import singbox_path
+
+    outbounds = [dict(server.outbound) for server in servers if server.outbound]
+    if not outbounds:
+        return []
+    ports = []
+    for _ in outbounds:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            ports.append(probe.getsockname()[1])
+    config = {
+        "log": {"level": "error"},
+        "dns": {"servers": [{"type": "local", "tag": "local"}], "final": "local"},
+        "inbounds": [{"type": "mixed", "tag": f"scan-{index}", "listen": "127.0.0.1",
+                      "listen_port": port} for index, port in enumerate(ports)],
+        "outbounds": outbounds + [{"type": "direct", "tag": "direct"}],
+        "route": {"rules": [{"inbound": [f"scan-{index}"], "outbound": item["tag"]}
+                            for index, item in enumerate(outbounds)],
+                  "final": "direct", "default_domain_resolver": "local"},
+    }
+    path = paths.data_dir() / "google-scan.json"
+    path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+    exe = singbox_path()
+    process = subprocess.Popen(
+        [str(exe), "run", "-c", str(path), "--disable-color"], cwd=str(exe.parent),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=winapi.CREATE_NO_WINDOW,
+    )
+
+    def one(index: int) -> tuple[str, str, str]:
+        proxy = f"http://127.0.0.1:{ports[index]}"
+        ip_country = _exit_country(proxy)[1]
+        return outbounds[index]["tag"], ip_country, google_country(proxy)
+
+    try:
+        time.sleep(2.0)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            rows = list(pool.map(one, range(len(outbounds))))
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    return rows
 
 
 # --- ссылки для человека --------------------------------------------------

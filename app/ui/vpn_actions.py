@@ -44,6 +44,13 @@ def start(parent: QObject, context: AppContext,
           on_done: Callable[[bool], None] | None = None,
           on_progress: Callable[[str], None] | None = None) -> Worker | None:
     """Поднять VPN в фоне. Возвращает рабочего — держите ссылку."""
+    if vpn_engine.is_starting():
+        # Второй запуск поверх идущего только перезапустил бы туннель и
+        # оборвал соединения. Тот, что уже идёт, сообщит о себе сам.
+        context.warn("VPN уже подключается — подождите несколько секунд.")
+        if on_done:
+            on_done(False)
+        return None
     settings = _settings(context)
     if not settings["servers"]:
         context.error("Сначала добавьте подписку на вкладке «VPN».")

@@ -121,10 +121,13 @@ def build_config(
     transport: str = TRANSPORT_TUN,
     proxy_port: int = 10808,
     google_via_vpn: bool = True,
+    google_proxy_ip: str = "",
+    google_proxy_hosts: list[str] | None = None,
 ) -> dict[str, Any]:
     if transport == TRANSPORT_PROXY:
         return build_proxy_config(servers, selected, clash_port, clash_secret,
-                                  log_level, proxy_port)
+                                  log_level, proxy_port,
+                                  google_proxy_ip, google_proxy_hosts)
 
     # Имя программы движок сравнивает посимвольно, поэтому кладём в правило
     # все написания — иначе «telegram.exe» из ручного ввода не совпадёт с
@@ -150,6 +153,10 @@ def build_config(
         rules.append({"inbound": [PROBE_TAG], "outbound": PROXY_TAG})
     if bypass_lan:
         rules.append({"ip_is_private": True, "outbound": DIRECT_TAG})
+
+    # Gemini и Antigravity — через прокси Smart DNS, если он есть: адреса VPN
+    # Google нередко считает российскими, а адреса этих прокси — нет.
+    rules.extend(google_proxy_rules(google_proxy_ip, google_proxy_hosts))
 
     # Сервисы Google проверяют страну и отказывают, если хоть часть запросов
     # пришла из России. Поэтому их домены идут через VPN всегда — даже когда
@@ -246,6 +253,23 @@ def build_config(
     return config
 
 
+def google_proxy_rules(proxy_ip: str, hosts: list[str] | None) -> list[dict[str, Any]]:
+    """Правила «Gemini и Antigravity — через прокси Smart DNS».
+
+    Соединение отправляется напрямую на адрес прокси, а имя сайта в TLS
+    остаётся прежним — прокси передаёт его Google как есть. QUIC прокси не
+    понимает, поэтому UDP к этим хостам отклоняем: браузер тут же уйдёт на TCP.
+    """
+    hosts = [host for host in (hosts or []) if host]
+    if not proxy_ip or not hosts:
+        return []
+    return [
+        {"domain": hosts, "network": ["udp"], "action": "reject"},
+        {"domain": hosts, "action": "route", "outbound": DIRECT_TAG,
+         "override_address": proxy_ip},
+    ]
+
+
 def build_proxy_config(
     servers: list[Server],
     selected: str = "",
@@ -253,6 +277,8 @@ def build_proxy_config(
     clash_secret: str = "",
     log_level: str = "warn",
     proxy_port: int = 10808,
+    google_proxy_ip: str = "",
+    google_proxy_hosts: list[str] | None = None,
 ) -> dict[str, Any]:
     """Только локальный прокси: ни адаптера, ни маршрутов, ни перехвата DNS."""
     return {
@@ -275,6 +301,7 @@ def build_proxy_config(
         "route": {
             "rules": [
                 {"action": "sniff"},
+                *google_proxy_rules(google_proxy_ip, google_proxy_hosts),
                 {"inbound": [PROXY_IN_TAG], "outbound": PROXY_TAG},
             ],
             "final": DIRECT_TAG,

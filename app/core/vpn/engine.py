@@ -123,6 +123,10 @@ class VpnEngine:
         # адаптер: со стороны выглядело как «VPN вообще перестал работать».
         self._op_lock = threading.RLock()
         self._request = 0
+        # Сколько запусков сейчас в пути. Нужно интерфейсу: пока туннель
+        # поднимается (при старте это до 20 секунд), тумблер должен показывать
+        # «подключается», а не «выключен» — иначе человек жмёт ещё раз.
+        self._starting = 0
         self._secret = secrets.token_hex(16)
         self._port = 9797
         self._servers: list[Server] = []
@@ -301,15 +305,26 @@ class VpnEngine:
 
         # Дальше — по очереди: пока идёт чужой запуск, свой не начинаем.
         # Иначе два запуска снимают процессы друг друга и дерутся за адаптер.
-        with self._op_lock:
-            if self._superseded(token):
-                logs.info("Запуск VPN отменён: пришёл более свежий запрос")
-                return
-            try:
-                self._start_queued(token, servers, selected, mode, vpn_apps,
-                                   direct_apps, stack, transport, settings)
-            except VpnSuperseded:
-                logs.info("Запуск VPN прерван: пришёл более свежий запрос")
+        with self._lock:
+            self._starting += 1
+        try:
+            with self._op_lock:
+                if self._superseded(token):
+                    logs.info("Запуск VPN отменён: пришёл более свежий запрос")
+                    return
+                try:
+                    self._start_queued(token, servers, selected, mode, vpn_apps,
+                                       direct_apps, stack, transport, settings)
+                except VpnSuperseded:
+                    logs.info("Запуск VPN прерван: пришёл более свежий запрос")
+        finally:
+            with self._lock:
+                self._starting -= 1
+
+    def is_starting(self) -> bool:
+        """Туннель прямо сейчас поднимается."""
+        with self._lock:
+            return self._starting > 0
 
     def _start_queued(
         self,
@@ -390,6 +405,16 @@ class VpnEngine:
         else:
             self._probe_port = _free_port(0)
 
+        # Прокси Smart DNS для Gemini и Antigravity: адрес берём из кэша, а если
+        # он устарел — спрашиваем сервис. Без сети просто пойдём через VPN.
+        try:
+            from app.core import google as google_module
+
+            google_proxy_ip, google_proxy_hosts = google_module.smartdns_route()
+        except Exception as exc:  # noqa: BLE001
+            logs.warn(f"Прокси Smart DNS для Google не получен: {exc}")
+            google_proxy_ip, google_proxy_hosts = "", []
+
         config = config_module.build_config(
             servers, selected=selected, mode=mode,
             vpn_apps=vpn_apps, direct_apps=direct_apps,
@@ -404,6 +429,8 @@ class VpnEngine:
             transport=transport,
             proxy_port=proxy_port,
             google_via_vpn=bool(settings.get("google_route_vpn", True)),
+            google_proxy_ip=google_proxy_ip,
+            google_proxy_hosts=google_proxy_hosts,
         )
         self.config_path.write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -88,7 +88,6 @@ class MONITORINFO(ctypes.Structure):
 PRIMARY_PAGES = (
     ("home", "Главная", "home"),
     ("strategies", "Запрет", "shield_check"),
-    ("vpn", "VPN", "layers"),
     ("telegram", "Telegram", "telegram"),
     ("google", "Google", "sparkles"),
     ("dns", "Smart DNS", "globe"),
@@ -96,7 +95,10 @@ PRIMARY_PAGES = (
     ("settings", "Настройки", "settings"),
 )
 
+# VPN включается плиткой на главной, а настройки подписки, серверов и
+# программ нужны реже — они здесь, в «Ещё».
 MORE_PAGES = (
+    ("vpn", "VPN", "layers"),
     ("speed", "Скорость интернета", "bolt"),
     ("lists", "Списки сайтов", "list"),
     ("about", "О программе", "info"),
@@ -697,6 +699,7 @@ class MainWindow(QWidget):
         self.context.refresh_status(force=force)
         self.context.refresh_tgws(force=force)
         self.context.refresh_vpn_status(force=force)
+        self.context.refresh_foreign_vpn(force=force)
         before = self.context.tunnels
         after = self.context.refresh_tunnels(force=force)
         if after != before:

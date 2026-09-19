@@ -219,6 +219,7 @@ class HomePage(Page):
 
         context.status_changed.connect(lambda _: self._refresh())
         context.tunnels_changed.connect(lambda _: self._refresh())
+        context.foreign_vpn_changed.connect(lambda _: self._refresh())
         context.tgws_changed.connect(lambda _: self._refresh())
         context.vpn_status_changed.connect(lambda _: self._refresh())
         context.servers_changed.connect(self._reload_servers)
@@ -226,7 +227,7 @@ class HomePage(Page):
         context.update_available.connect(self._update_available)
 
         self._tick = QTimer(self)
-        self._tick.timeout.connect(self._refresh_uptime)
+        self._tick.timeout.connect(self._on_tick)
         self._tick.start(1000)
 
         self._reload_strategies()
@@ -493,6 +494,10 @@ class HomePage(Page):
             self.tile_vpn.set_state(f"выключен · {transport_label}")
         else:
             self.tile_vpn.set_state("выключен · нужна подписка")
+        from app.core.vpn.engine import vpn_engine
+
+        if vpn_engine.is_starting():
+            self.tile_vpn.set_state("подключается…")
         self.tile_tg.set_state(
             f"работает · порт {tg.port}" + (f" · соединений {tg.active}" if tg.active else "")
             if tg.running else "выключен · Telegram напрямую"
@@ -541,7 +546,7 @@ class HomePage(Page):
             title = "Всё идёт напрямую"
             detail = "Ничего не включено. Начните с обхода — это один тумблер."
         self._set_state(title, detail, bool(active))
-        self._sync_tunnel_banner(tunnels, status.running)
+        self._sync_tunnel_banner(self.context.foreign_vpn, status.running)
         self._refresh_uptime()
 
     def _set_state(self, title: str, detail: str, active: bool) -> None:
@@ -557,15 +562,14 @@ class HomePage(Page):
         fade_in(self.state_title, 280, keep=self._animations)
         del self._animations[:-12]
 
-    def _sync_tunnel_banner(self, tunnels: list[str], zapret_on: bool) -> None:
-        if not tunnels or not config.get("warn_about_vpn", True):
+    def _sync_tunnel_banner(self, foreign: list[str], zapret_on: bool) -> None:
+        """Небольшая плашка, пока работает сторонний VPN — туннелем или прокси."""
+        if not foreign or not config.get("warn_about_vpn", True):
             self.banner_tunnel.setVisible(False)
             return
-        names = ", ".join(tunnels)
+        names = ", ".join(foreign)
         self.banner_tunnel.set_text(
-            f"Обнаружен другой VPN — {names}. Он может мешать обходу."
-            if zapret_on else
-            f"Обнаружен другой VPN — {names}. Программа его не трогает."
+            f"Обнаружен другой VPN — {names}. Он может мешать работе программы."
         )
         self.banner_tunnel.action.setVisible(zapret_on)
         if not self.banner_tunnel.isVisible():
@@ -593,6 +597,22 @@ class HomePage(Page):
         kind = "app" if "app" in self._pending_updates else "core"
         self.context.navigate.emit("updates")
         self.context.install_update.emit(kind)
+
+    def _sync_vpn_starting(self) -> None:
+        """Пока туннель поднимается, плитка занята — второй щелчок не нужен."""
+        from app.core.vpn.engine import vpn_engine
+
+        starting = vpn_engine.is_starting()
+        if starting:
+            self.tile_vpn.set_busy(True)
+            self.tile_vpn.set_state("подключается…")
+        elif not self._busy_vpn and not self.tile_vpn.switch.isEnabled():
+            self.tile_vpn.set_busy(False)
+            self._refresh()
+
+    def _on_tick(self) -> None:
+        self._sync_vpn_starting()
+        self._refresh_uptime()
 
     def _refresh_uptime(self) -> None:
         seconds = engine.uptime_seconds()
