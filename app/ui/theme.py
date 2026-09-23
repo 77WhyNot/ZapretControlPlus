@@ -470,10 +470,16 @@ QPushButton[variant="ghost"] {{
 }}
 QPushButton[variant="ghost"]:hover {{ background: {hover}; color: {text}; }}
 
-QPushButton[size="large"] {{
+QPushButton[sizeVariant="large"] {{
     padding: 13px 26px;
     font-size: 14px;
     border-radius: 11px;
+}}
+
+QPushButton[sizeVariant="small"] {{
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: 7px;
 }}
 
 /* ---------- Поля ввода ---------- */
@@ -489,6 +495,7 @@ QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus {{
     border-color: {accent};
 }}
+QLineEdit[invalid="true"] {{ border-color: {danger}; }}
 QPlainTextEdit, QTextEdit {{ font-family: "Cascadia Mono", "Consolas", monospace; }}
 
 QComboBox {{

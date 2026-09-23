@@ -71,6 +71,9 @@ DEFAULTS: dict[str, Any] = {
     "vpn_last_update": 0,
     "vpn_proxy_port": 10808,
     "vpn_proxy_backup": {},         # системный прокси до нас (режим «Прокси»)
+    # Игровой фильтр: свои диапазоны портов (пусто — 1024-65535, как в ядре).
+    "game_filter_tcp_range": "",
+    "game_filter_udp_range": "",
     # Прочее
     "home_dns_preset": "xbox",      # сервис Smart DNS для тумблера на главной
     "speedtest_last": {},           # последний замер скорости, чтобы не пустовало

@@ -36,7 +36,9 @@ def apply_variant(widget: QWidget, variant: str = "", size: str = "") -> QWidget
     if variant:
         widget.setProperty("variant", variant)
     if size:
-        widget.setProperty("size", size)
+        # Не «size»: так у каждого виджета Qt зовётся его размер, и стиль
+        # сравнивал бы с ним, а не с нашим «small» или «large».
+        widget.setProperty("sizeVariant", size)
     return widget
 
 

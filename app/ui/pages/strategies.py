@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
-    QProgressBar,
     QVBoxLayout,
     QWidget,
 )
@@ -168,9 +167,10 @@ class StrategiesPage(Page):
         )
         self._rows: list[StrategyRow] = []
         self._rows_signature: tuple = ()
-        self._tester: autotest.AutoTester | None = None
+        self._tester = None
         self._auto_worker: Worker | None = None
         self._busy = False
+        self._testing = False
 
         self._build_current()
         self._build_autopick()
@@ -275,15 +275,40 @@ class StrategiesPage(Page):
             "ok" if running else "neutral",
         )
         self.btn_current_run.setText("Перезапустить" if running else "Запустить")
-        self.btn_current_stop.setEnabled(running and not self._busy)
-        self.btn_current_run.setEnabled(not self._busy)
+        free = not self._busy and not self._testing
+        self.btn_current_stop.setEnabled(running and free)
+        self.btn_current_run.setEnabled(free)
+        self._sync_launchers(free)
         active = next((item for item in self.context.load_strategies()
                        if item.id == status.strategy_id), None)
         self.current_hint.setText(
+            "Идёт проверка стратегий — обход вернётся сам через несколько секунд."
+            if self._testing else
             f"Сейчас работает «{active.title}»." if running and active else
             "Выберите стратегию и нажмите «Запустить». Не знаете какую — "
-            "нажмите «Подобрать» ниже, программа проверит их сама."
+            "нажмите «Проверить все» ниже: программа проверит их разом."
         )
+
+    def _sync_launchers(self, free: bool) -> None:
+        """Всё, что запускает или снимает обход, — только когда движок свободен.
+
+        Иначе двойной щелчок по «Применить» запускал два перезапуска разом,
+        и они удаляли службу друг у друга, а «Проверить все» посреди
+        перезапуска заставала обход «выключенным» и не возвращала его.
+        """
+        for row in self._rows:
+            row.btn_run.setEnabled(free)
+        if hasattr(self, "board"):
+            self.board.set_enabled(free)
+            self.btn_apply_best.setEnabled(free)
+            if not self._testing:           # во время проверки это «Отменить»
+                self.btn_auto.setEnabled(not self._busy)
+        if hasattr(self, "btn_restart"):
+            self.btn_restart.setEnabled(free)
+            # Фильтры, поменянные посреди проверки, не попали бы в обход,
+            # который она вернёт, — пусть подождут пару секунд.
+            for widget in (self.game_box, self.ipset_box, self.game_ports_row, self.mode_box):
+                widget.setEnabled(not self._testing)
 
     def _apply_current(self) -> None:
         strategy = self._selected_strategy()
@@ -293,6 +318,8 @@ class StrategiesPage(Page):
         self.run_strategy(strategy)
 
     def _stop_current(self) -> None:
+        if self._busy or self._testing:
+            return
         self._busy = True
         self.current_spinner.start()
         self._sync_current()
@@ -323,203 +350,274 @@ class StrategiesPage(Page):
         else:
             self.context.ok(f"Режим работы: {label}")
 
-    # --- автоподбор ------------------------------------------------------
+    # --- подбор: все стратегии разом ---------------------------------------
 
     def _build_autopick(self) -> None:
-        card = Card(padding=20, spacing=14)
+        from app.ui.leaderboard import Leaderboard, ShimmerBar
+
+        card = Card(padding=20, spacing=12)
 
         header = QHBoxLayout()
         header.setSpacing(10)
         self.auto_icon = IconLabel("bolt", self.context.color("accent"), 20)
         header.addWidget(self.auto_icon)
-        header.addWidget(section_label("Автоподбор стратегии"))
+        header.addWidget(section_label("Подбор стратегии"))
         header.addStretch(1)
         self.auto_spinner = Spinner(16, self.context.color("accent"))
         header.addWidget(self.auto_spinner)
-
-        self.auto_scope = QComboBox()
-        self.auto_scope.addItem("Быстрый — 8 популярных", "quick")
-        self.auto_scope.addItem("Полный — все стратегии", "full")
-        header.addWidget(self.auto_scope)
-
-        self.btn_auto = Button("Подобрать", variant="primary")
+        self.btn_auto = Button("Проверить все", variant="primary")
         self.btn_auto.clicked.connect(self._toggle_autopick)
         header.addWidget(self.btn_auto)
         card.add_layout(header)
 
         card.add(faint_label(
-            "Программа выключит обход, посмотрит, какие адреса не открываются, "
-            "и прогонит стратегии в два захода: сначала быстро по нескольким "
-            "показательным адресам, затем лучших — по всему списку. "
-            "Во время подбора связь будет прерываться — это нормально."
+            "Программа на несколько секунд снимет обход, разом проверит все "
+            "стратегии на заблокированных сайтах и вернёт всё как было. "
+            "Останется выбрать лучшую — одним щелчком."
         ))
 
-        self.auto_progress = QProgressBar()
-        card.add(self.auto_progress)
-        self.auto_progress.setVisible(False)
+        self.auto_bar = ShimmerBar(self.context)
+        card.add(self.auto_bar)
+        self.auto_bar.setVisible(False)
 
         self.auto_status = faint_label("")
         card.add(self.auto_status)
         self.auto_status.setVisible(False)
 
-        self.auto_results = QWidget()
-        self.auto_results_layout = QVBoxLayout(self.auto_results)
-        self.auto_results_layout.setContentsMargins(0, 0, 0, 0)
-        self.auto_results_layout.setSpacing(6)
-        card.add(self.auto_results)
+        # Итог: коротко о лучшей и кнопка, чтобы поставить её сразу.
+        self.auto_summary = QWidget()
+        summary = QHBoxLayout(self.auto_summary)
+        summary.setContentsMargins(0, 2, 0, 2)
+        summary.setSpacing(10)
+        self.auto_summary_text = QLabel("")
+        self.auto_summary_text.setWordWrap(True)
+        summary.addWidget(self.auto_summary_text, 1)
+        self.btn_apply_best = Button("Применить лучшую", variant="primary")
+        self.btn_apply_best.clicked.connect(self._apply_best)
+        summary.addWidget(self.btn_apply_best, 0, Qt.AlignmentFlag.AlignVCenter)
+        card.add(self.auto_summary)
+        self.auto_summary.setVisible(False)
 
+        self.board = Leaderboard(self.context)
+        self.board.apply_requested.connect(self.run_strategy)
+        card.add(self.board)
+        self.board.setVisible(False)
+
+        self._best_strategy: Strategy | None = None
         self.body.addWidget(card)
 
     def _toggle_autopick(self) -> None:
-        if self._tester is not None and not self._tester.cancelled:
+        if self._tester is not None:
+            # Одна отмена на всё: перебор по одной делит флаг с проверкой разом.
             self._tester.cancel()
-            self.auto_status.setText("Отмена… дождитесь завершения текущей проверки.")
+            self.auto_status.setText("Отменяем… обход вернётся через пару секунд.")
             self.btn_auto.setEnabled(False)
             return
         self._start_autopick()
 
     def _start_autopick(self) -> None:
-        self._clear_auto_results()
-        tester = autotest.AutoTester()
-        self._tester = tester
+        import time
 
+        from PySide6.QtCore import QObject, Signal
+
+        from app.core import parallel
+
+        if self._busy or self._testing:
+            # Посреди запуска или остановки проверка застала бы обход
+            # «выключенным» и не вернула бы его.
+            return
         all_strategies = self.context.load_strategies()
         if not all_strategies:
+            # Раньше проверяющий создавался до этой проверки, и кнопка
+            # «Подобрать» после неё оставалась выключенной навсегда.
             self.context.error("Стратегии не найдены — проверьте вкладку «Обновления».")
             return
-        scope = self.auto_scope.currentData()
-        candidates = (
-            autotest.shortlist(all_strategies) if scope == "quick" else all_strategies
-        )
+        targets = autotest.load_targets()[:autotest.MAX_TARGETS]
+        tester = parallel.ParallelTester()
+        self._tester = tester
 
+        class Events(QObject):
+            event = Signal(str, object)
+
+        events = Events(self)
+        events.event.connect(self._on_test_event)
+        self._events = events
+
+        self._set_testing(True)
         self.btn_auto.setText("Отменить")
+        self.btn_auto.setEnabled(True)
         self.auto_spinner.start()
-        self.auto_progress.setVisible(True)
-        self.auto_progress.setRange(0, len(candidates))
-        self.auto_progress.setValue(0)
+        self.auto_bar.setVisible(True)
+        self.auto_bar.start()
         self.auto_status.setVisible(True)
-        self.auto_status.setText("Проверяем, что заблокировано…")
+        self.auto_status.setText("Готовимся…")
+        self.auto_summary.setVisible(False)
+        self._done_ids: set[str] = set()
+        self._total_count = 0
+
+        def fallback(token) -> parallel.ParallelReport:
+            """Разом нельзя — перебираем по одной, как раньше, но под ключом
+            проверки и только ходовые стратегии: полный перебор — минуты."""
+            started = time.perf_counter()
+            sequential = autotest.AutoTester(token=token, cancel_event=tester.cancel_event)
+            blocked, baseline = sequential.find_blocked()
+            if sequential.cancelled:
+                raise parallel.Cancelled("Проверка отменена.")
+            report = parallel.ParallelReport(baseline=baseline, blocked=blocked)
+            if not blocked:
+                report.note = "Всё открывается и без обхода — сравнивать стратегии не на чем."
+                report.seconds = time.perf_counter() - started
+                return report
+            candidates = autotest.shortlist(all_strategies)
+            events.event.emit(parallel.EVENT_STARTED, (candidates, blocked))
+            events.event.emit(parallel.EVENT_PHASE, "Проверяем по одной — так дольше…")
+            report.scores = sequential.evaluate(
+                candidates, blocked, mode=MODE_PROCESS,
+                on_result=lambda score: events.event.emit(parallel.EVENT_RESULT, score),
+            )
+            # Прерванный перебор — не итог: лучшая из половины списка
+            # выдавалась бы за лучшую вообще.
+            if sequential.cancelled:
+                raise parallel.Cancelled("Проверка отменена.")
+            report.seconds = time.perf_counter() - started
+            return report
 
         worker = Worker(self)
-        worker.progress.connect(self._auto_progress)
         worker.finished.connect(self._auto_finished)
         worker.failed.connect(self._auto_failed)
-
-        def job():
-            blocked, baseline = tester.find_blocked()
-            if not blocked:
-                return {"blocked": [], "scores": [], "baseline": baseline}
-            worker.progress.emit(
-                f"Не открывается адресов: {len(blocked)}. Подбираем стратегию…", 0
-            )
-            scores = tester.evaluate(
-                candidates,
-                blocked,
-                mode=MODE_PROCESS,
-                on_progress=lambda index, total, strategy, stage: worker.progress.emit(
-                    f"[{index}/{total}] {strategy.title}"
-                    if stage == autotest.STAGE_QUICK
-                    else f"Полная проверка: {strategy.title}",
-                    index,
-                ),
-            )
-            return {"blocked": blocked, "scores": scores, "baseline": baseline}
-
-        worker.run(job)
+        worker.run(
+            parallel.check_all, all_strategies, targets, tester,
+            lambda kind, payload: events.event.emit(kind, payload), fallback,
+        )
         self._auto_worker = worker
 
-    def _auto_progress(self, text: str, value: int) -> None:
-        self.auto_status.setText(text)
-        if value:
-            self.auto_progress.setValue(value)
+    def _on_test_event(self, kind: str, payload) -> None:
+        from app.core import parallel
 
-    def _auto_failed(self, message: str) -> None:
-        self._finish_autopick()
-        self.context.error(f"Автоподбор прервался: {message}")
+        if kind == parallel.EVENT_PHASE:
+            self.auto_status.setText(str(payload))
+        elif kind == parallel.EVENT_BASELINE:
+            blocked = sum(1 for item in payload if not item.ok)
+            self.auto_status.setText(
+                f"Без обхода не открывается сайтов: {blocked} из {len(payload)}."
+                if blocked else "Без обхода открывается всё."
+            )
+            self.auto_bar.set_fraction(0.15)
+        elif kind == parallel.EVENT_STARTED:
+            # Таблица начинается заново (в том числе при переходе на перебор
+            # по одной) — и счёт вместе с ней.
+            strategies_list, targets = payload
+            self._done_ids = set()
+            self._total_count = len(strategies_list)
+            self.board.setVisible(True)
+            self.board.start(strategies_list, targets)
+            self.auto_bar.set_fraction(0.25)
+        elif kind == parallel.EVENT_RESULT:
+            self.board.update_score(payload)
+            # По стратегиям, а не по событиям: у одной их бывает два
+            # (после первой волны и после перепроверки осечек).
+            self._done_ids.add(payload.strategy.id)
+            if self._total_count:
+                self.auto_bar.set_fraction(
+                    0.25 + 0.6 * min(1.0, len(self._done_ids) / self._total_count))
+        elif kind == parallel.EVENT_RETRY:
+            self.auto_status.setText(f"Перепроверяем осечки: {payload}…")
+            self.auto_bar.set_fraction(0.9)
+
+    def _set_testing(self, testing: bool) -> None:
+        """Пока идёт проверка, запускать и снимать обход со страницы нельзя."""
+        self._testing = testing
+        self._sync_current()
 
     def _finish_autopick(self) -> None:
         self.auto_spinner.stop()
-        self.auto_progress.setVisible(False)
-        self.btn_auto.setText("Подобрать")
-        self.btn_auto.setEnabled(True)
+        self.auto_bar.stop()
+        self.btn_auto.setText("Проверить заново")
         self._tester = None
+        self._set_testing(False)
         self.context.refresh_status(force=True)
 
-    def _clear_auto_results(self) -> None:
-        clear_layout(self.auto_results_layout)
-
-    def _auto_finished(self, payload) -> None:
+    def _auto_failed(self, message: str) -> None:
         self._finish_autopick()
-        blocked = payload.get("blocked", [])
-        scores = payload.get("scores", [])
+        self.board.stop_waiting()
+        self.auto_status.setText(f"Проверка прервалась: {message}")
+        self.context.error(f"Проверка прервалась: {message}")
 
-        if not blocked:
+    def _auto_finished(self, outcome) -> None:
+        self._finish_autopick()
+        report = outcome.report
+        previous = outcome.previous
+        back = (" Обход возвращён." if outcome.restored else "")
+        if previous.external:
+            # Чужой winws проверка снимает (иначе он перехватил бы весь трафик
+            # и испортил сравнение), а вернуть его может только тот, кто запускал.
+            back = " Сторонний winws снят — включите обход здесь или в той программе."
+        if outcome.restore_error:
+            self.context.error(f"Не удалось вернуть обход: {outcome.restore_error}")
+
+        if outcome.cancelled:
+            self.board.stop_waiting()
+            self.auto_status.setText("Проверка отменена." + back)
+            return
+        if report.problem:
+            self.board.setVisible(False)
+            self.auto_status.setText(report.problem + back)
+            self.context.warn(report.problem)
+            return
+        if report.note:
+            self.board.setVisible(False)
             self.auto_status.setText(
-                "Все проверяемые адреса открываются и без обхода. "
-                "Возможно, включён VPN или провайдер вас не блокирует."
-            )
+                report.note + " Возможно, провайдер вас не блокирует." + back)
             self.context.ok("Блокировок не обнаружено")
             return
 
-        if not scores:
-            self.auto_status.setText("Подбор отменён.")
+        scores = report.scores
+        # «Сейчас» и «ваша» — только про обход, который работает и после
+        # проверки: если вернуть не вышло, ничего не работает.
+        current_id = previous.strategy.id \
+            if outcome.restored and previous.strategy is not None else ""
+        self.board.finish(scores, current_id)
+        best = report.best
+        how = "по одной" if outcome.sequential else "разом"
+        self.auto_status.setText(
+            f"Проверено стратегий: {len(scores)} {how} за {report.seconds:.0f} с." + back
+        )
+        if best is None:
+            self._best_strategy = None
+            self.auto_summary_text.setText(
+                "Ни одна стратегия не открыла заблокированные сайты. Загляните "
+                "в «Диагностику» — возможно, мешает другая программа."
+            )
+            self.btn_apply_best.setVisible(False)
+            self.auto_summary.setVisible(True)
+            self.context.warn("Рабочих стратегий не нашлось")
             return
 
-        best = scores[0]
-        self.auto_status.setText(
-            f"Проверено стратегий: {len(scores)}. Лучший результат — "
-            f"«{best.strategy.title}» ({best.passed} из {best.total})."
-        )
+        self._best_strategy = best.strategy
+        mine = next((item for item in scores if item.strategy.id == current_id), None)
+        text = (f"Лучшая — «{best.strategy.title}»: открыла {best.passed} из "
+                f"{best.total} сайтов.")
+        if mine is not None and mine.strategy.id != best.strategy.id:
+            if mine.passed == best.passed:
+                text += f" Ваша «{mine.strategy.title}» открывает столько же — менять не обязательно."
+            else:
+                text += (f" Ваша «{mine.strategy.title}» открыла {mine.passed} из "
+                         f"{mine.total} — лучше сменить.")
+        # «Стоит» — только если обход правда вернулся: при неудаче возврата
+        # кнопка нужна, чтобы поставить стратегию снова.
+        already = mine is not None and mine.strategy.id == best.strategy.id \
+            and outcome.restored
+        if already:
+            text += " Она у вас и стоит."
+        self.auto_summary_text.setText(text)
+        self.btn_apply_best.setText(f"Применить «{best.strategy.title}»")
+        self.btn_apply_best.setVisible(not already)
+        self.auto_summary.setVisible(True)
+        self.context.ok(f"Лучшая стратегия — «{best.strategy.title}»")
 
-        for score in scores[:8]:
-            self.auto_results_layout.addWidget(self._score_row(score))
-
-        if best.passed == 0:
-            self.context.warn(
-                "Ни одна стратегия не открыла заблокированные адреса. "
-                "Загляните в «Диагностику» — возможно, мешает другая программа."
-            )
-        else:
-            self.context.ok(f"Лучшая стратегия: «{best.strategy.title}»")
-
-    def _score_row(self, score: autotest.StrategyScore) -> QWidget:
-        line = QWidget()
-        layout = QHBoxLayout(line)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        if score.error:
-            kind, token, icon_name = "error", "danger", "cross"
-        elif score.is_perfect:
-            kind, token, icon_name = "ok", "success", "check"
-        elif score.passed:
-            kind, token, icon_name = "warn", "warning", "warning"
-        else:
-            kind, token, icon_name = "error", "danger", "cross"
-
-        layout.addWidget(IconLabel(icon_name, self.context.color(token), 16))
-
-        name = QLabel(score.strategy.title)
-        name.setStyleSheet("font-weight: 600;")
-        layout.addWidget(name)
-
-        if score.error:
-            layout.addWidget(faint_label("не запустилась"))
-        else:
-            layout.addWidget(Badge(f"{score.passed} из {score.total}", kind))
-            if score.stage == autotest.STAGE_QUICK:
-                layout.addWidget(Badge("быстрая проверка", "neutral"))
-            if score.latency_ms:
-                layout.addWidget(faint_label(f"{score.latency_ms:.0f} мс"))
-        layout.addStretch(1)
-
-        if not score.error and score.passed:
-            apply_button = Button("Применить", variant="soft")
-            apply_button.clicked.connect(
-                lambda _=False, s=score.strategy: self.run_strategy(s)
-            )
-            layout.addWidget(apply_button)
-        return line
+    def _apply_best(self) -> None:
+        if self._best_strategy is not None:
+            self.run_strategy(self._best_strategy)
 
     # --- фильтры ---------------------------------------------------------
 
@@ -532,18 +630,46 @@ class StrategiesPage(Page):
 
         self.game_box = QComboBox()
         for key, label in GAME_FILTER_LABELS.items():
-            self.game_box.addItem(label.capitalize(), key)
+            # Не capitalize(): он превратил бы «TCP и UDP» в «Tcp и udp».
+            self.game_box.addItem(label[:1].upper() + label[1:], key)
         index = self.game_box.findData(self.context.current_game_filter())
         if index >= 0:
             self.game_box.setCurrentIndex(index)
         self.game_box.currentIndexChanged.connect(self._change_game_filter)
         card.add(SettingRow(
             "Игровой фильтр",
-            "Расширяет обход на порты 1024–65535, чтобы работали игры и голосовые "
-            "сервисы. Нагрузка растёт, часть программ может сбоить — включайте, "
-            "только если без него игры не работают.",
+            "Расширяет обход на порты игр и голосовых сервисов (обычно 1024–65535). "
+            "Нагрузка растёт, часть программ может сбоить — включайте, только "
+            "если без него игры не работают.",
             self.game_box,
         ))
+
+        # Свои порты — с ядра 1.10.3. Строка видна, только пока фильтр включён.
+        ports = QWidget()
+        ports_layout = QHBoxLayout(ports)
+        ports_layout.setContentsMargins(0, 0, 0, 0)
+        ports_layout.setSpacing(8)
+        self.game_ports: dict[str, QLineEdit] = {}
+        self.game_port_labels: dict[str, QLabel] = {}
+        for kind in ("tcp", "udp"):
+            caption = faint_label(kind.upper())
+            field = QLineEdit()
+            field.setPlaceholderText(strategies_module.DEFAULT_GAME_RANGE)
+            field.setFixedWidth(180)
+            field.setToolTip("Порты через запятую: одиночные или диапазоны, "
+                             "например 1024-1934,1936-65535")
+            field.editingFinished.connect(lambda kind=kind: self._change_game_ports(kind))
+            ports_layout.addWidget(caption)
+            ports_layout.addWidget(field)
+            self.game_ports[kind] = field
+            self.game_port_labels[kind] = caption
+        self.game_ports_row = SettingRow(
+            "Порты игрового фильтра",
+            "Менять обычно не нужно. Если какая-то программа сбоит, её порт можно "
+            "исключить: «1024-1934,1936-65535». Пустое поле — все порты от 1024.",
+            ports,
+        )
+        card.add(self.game_ports_row)
         card.add(Divider())
 
         self.ipset_box = QComboBox()
@@ -578,6 +704,7 @@ class StrategiesPage(Page):
         if index >= 0:
             self.game_box.setCurrentIndex(index)
         self.game_box.blockSignals(False)
+        self._sync_game_ports()
 
         self.ipset_box.blockSignals(True)
         index = self.ipset_box.findData(lists_module.ipset_mode())
@@ -680,16 +807,55 @@ class StrategiesPage(Page):
     def _change_game_filter(self) -> None:
         mode = str(self.game_box.currentData())
         strategies_module.write_game_filter(mode)
+        self._sync_game_ports()
+        self._game_filter_saved(f"Игровой фильтр: {GAME_FILTER_LABELS[mode]}")
+
+    def _sync_game_ports(self) -> None:
+        settings = strategies_module.read_game_filter_settings()
+        self.game_ports_row.setVisible(settings.mode != "off")
+        for kind, field in self.game_ports.items():
+            value = getattr(settings, f"{kind}_range")
+            field.setText("" if value == strategies_module.DEFAULT_GAME_RANGE else value)
+            field.setCursorPosition(0)
+            self._mark_port_field(field, False)
+            used = settings.mode in ("all", kind)
+            field.setEnabled(used)
+            self.game_port_labels[kind].setEnabled(used)
+
+    @staticmethod
+    def _mark_port_field(field: QLineEdit, invalid: bool) -> None:
+        if field.property("invalid") == invalid:
+            return
+        field.setProperty("invalid", invalid)
+        field.style().unpolish(field)
+        field.style().polish(field)
+
+    def _change_game_ports(self, kind: str) -> None:
+        field = self.game_ports[kind]
+        text = field.text().strip()
+        value = strategies_module.validate_port_range(text) if text \
+            else strategies_module.DEFAULT_GAME_RANGE
+        if not value:
+            self._mark_port_field(field, True)
+            self.context.warn(f"Порты {kind.upper()}: нужны числа 1–65535 через "
+                              "запятую или диапазоны вроде 1024-65535.")
+            return
+        self._mark_port_field(field, False)
+        settings = strategies_module.read_game_filter_settings()
+        if getattr(settings, f"{kind}_range") == value:
+            return
+        strategies_module.write_game_filter(settings.mode, **{f"{kind}_range": value})
+        self._sync_game_ports()
+        shown = "все от 1024" if value == strategies_module.DEFAULT_GAME_RANGE else value
+        self._game_filter_saved(f"Порты {kind.upper()} игрового фильтра: {shown}")
+
+    def _game_filter_saved(self, message: str) -> None:
         self._reload_rows(force=True)
         self.context.strategies_changed.emit()
-        status = self.context.status
-        if status.running:
-            self.context.warn(
-                f"Игровой фильтр: {GAME_FILTER_LABELS[mode]}. "
-                "Перезапустите обход, чтобы изменения вступили в силу."
-            )
+        if self.context.status.running:
+            self.context.warn(f"{message}. Перезапустите обход, чтобы изменения вступили в силу.")
         else:
-            self.context.ok(f"Игровой фильтр: {GAME_FILTER_LABELS[mode]}")
+            self.context.ok(message)
 
     # --- список ----------------------------------------------------------
 
@@ -763,6 +929,12 @@ class StrategiesPage(Page):
     # --- запуск ----------------------------------------------------------
 
     def run_strategy(self, strategy: Strategy) -> None:
+        if self._busy or self._testing:
+            return  # второй щелчок, пока идёт первый запуск, или идёт проверка
+        # Строка таблицы и итог проверки помнят стратегию с аргументами на
+        # момент проверки; фильтры с тех пор могли поменять — берём заново.
+        strategy = strategies_module.find_strategy(
+            strategy.id, self.context.current_game_filter()) or strategy
         config.set("last_strategy", strategy.id)
         mode = str(config.get("run_mode", MODE_SERVICE))
 
@@ -772,8 +944,6 @@ class StrategiesPage(Page):
         if index >= 0:
             self.current_box.setCurrentIndex(index)
         self._sync_current()
-        for row in self._rows:
-            row.btn_run.setEnabled(False)
 
         worker = Worker(self)
         worker.finished.connect(lambda _: self._after_run(strategy))
@@ -784,8 +954,6 @@ class StrategiesPage(Page):
     def _after_run(self, strategy: Strategy) -> None:
         self._busy = False
         self.current_spinner.stop()
-        for row in self._rows:
-            row.btn_run.setEnabled(True)
         self.context.refresh_status(force=True)
         self._sync_current()
         self.context.ok(f"Запущена стратегия «{strategy.title}»")
@@ -793,8 +961,6 @@ class StrategiesPage(Page):
     def _after_run_error(self, message: str) -> None:
         self._busy = False
         self.current_spinner.stop()
-        for row in self._rows:
-            row.btn_run.setEnabled(True)
         self.context.refresh_status(force=True)
         self._sync_current()
         self.context.error(message)
@@ -814,6 +980,7 @@ class StrategiesPage(Page):
         self.current_spinner.set_color(accent)
         self.discord_spinner.set_color(accent)
         self.list_more.apply_theme()
+        self.board.apply_theme()
         for row in self._rows:
             row.apply_theme()
         self._mark_running()

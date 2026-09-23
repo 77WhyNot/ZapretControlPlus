@@ -539,7 +539,9 @@ class HomePage(Page):
         self.tile_dns.set_on(dns_on)
 
         strategy = self.context.current_strategy()
+        testing = engine.testing
         self.tile_zapret.set_state(
+            "идёт проверка стратегий…" if testing else
             f"работает · {status.mode_label}" if status.running
             else "выключен · сайты и Discord напрямую"
         )
@@ -710,6 +712,11 @@ class HomePage(Page):
     def _toggle_zapret(self, value: bool) -> None:
         if self._busy_zapret:
             return
+        if engine.testing:
+            # Обход сейчас у проверки стратегий; она сама вернёт его как было.
+            self.context.warn("Идёт проверка стратегий — обход вернётся сам через пару секунд.")
+            self._refresh()
+            return
         if value:
             strategy = self.context.current_strategy()
             if strategy is None:
@@ -724,6 +731,17 @@ class HomePage(Page):
     def _strategy_picked(self, index: int) -> None:
         strategy_id = str(self.strategy_box.itemData(index) or "")
         if not strategy_id:
+            return
+        if engine.testing:
+            # Обход сейчас у проверки, и вернёт она прежнюю стратегию — выбор
+            # потерялся бы молча. Возвращаем список к прежней.
+            self.context.warn("Идёт проверка стратегий — выберите стратегию через пару секунд.")
+            current = self.context.current_strategy()
+            position = self.strategy_box.findData(current.id) if current else -1
+            if position >= 0:
+                self.strategy_box.blockSignals(True)
+                self.strategy_box.setCurrentIndex(position)
+                self.strategy_box.blockSignals(False)
             return
         config.set("last_strategy", strategy_id)
         strategy = self.context.current_strategy()

@@ -238,6 +238,21 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         logs.warn(f"Не удалось прибрать за прошлым запуском: {exc}")
 
+    # Копии winws от проверки стратегий, если программа упала посреди неё:
+    # они держат фильтры перехвата и память. Снимаем только свои.
+    try:
+        from app.core import parallel
+
+        parallel.cleanup_leftovers()
+        # Служба, снятая на время той проверки, — ставим обратно в фоне:
+        # это пара секунд, окно их ждать не должно.
+        import threading
+
+        threading.Thread(target=parallel.restore_interrupted, daemon=True,
+                         name="restore-after-check").start()
+    except Exception as exc:  # noqa: BLE001
+        logs.warn(f"Не удалось прибрать за проверкой стратегий: {exc}")
+
     step("Проверка файлов ядра…", 0.15)
     if not paths.core_is_valid():
         logs.warn(f"Ядро zapret не найдено в {paths.core_dir()}")

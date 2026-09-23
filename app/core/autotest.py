@@ -26,8 +26,10 @@ TEST_TIMEOUT = 6
 # ждём ровно столько, сколько нужно обходу, чтобы начать резать пакеты.
 FAST_TIMEOUT = 3.0
 SETTLE_SECONDS = 0.8
-MAX_TARGETS = 10
-MAX_WORKERS = 10
+# Весь список апстрима с нейросетями — полтора десятка адресов. Раньше он
+# обрезался до десяти, и выпадали видеосервер YouTube, Google и Cloudflare.
+MAX_TARGETS = 16
+MAX_WORKERS = 16
 
 # Сначала гоняем все стратегии по нескольким «канарейкам» — этого хватает,
 # чтобы отсеять нерабочие, — и только лучших проверяем по всему списку.
@@ -124,8 +126,20 @@ def load_targets() -> list[Target]:
     return targets or list(DEFAULT_TARGETS)
 
 
+# Имена, которые при разбиении по заглавным буквам разваливаются на части.
+BRANDS = {"You Tube": "YouTube", "Git Hub": "GitHub", "Chat GPT": "ChatGPT"}
+
+
 def _humanize(key: str) -> str:
-    return re.sub(r"(?<!^)(?=[A-Z0-9])", " ", key).replace("_", " ").strip()
+    """DiscordCDN → «Discord CDN», YouTubeWeb → «YouTube Web».
+
+    Раньше каждая заглавная буква отделялась пробелом: «Discord C D N».
+    """
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", key)
+    text = text.replace("_", " ").strip()
+    for broken, whole in BRANDS.items():
+        text = text.replace(broken, whole)
+    return text
 
 
 # --- одиночные проверки --------------------------------------------------
@@ -180,8 +194,14 @@ def quick_check(proxy_url: str | None = None) -> list[ProbeResult]:
 class AutoTester:
     """Перебор стратегий с возможностью отмены."""
 
-    def __init__(self) -> None:
-        self.cancel_event = threading.Event()
+    def __init__(self, token: object | None = None,
+                 cancel_event: threading.Event | None = None) -> None:
+        # Общий флаг отмены с проверкой разом: «Отменить» и выход из
+        # программы отменяют её, а с ней и этот перебор.
+        self.cancel_event = cancel_event or threading.Event()
+        # Ключ из engine.begin_test(): без него движок не даст запускать и
+        # снимать стратегии, пока идёт проверка.
+        self.token = token
 
     def cancel(self) -> None:
         self.cancel_event.set()
@@ -192,7 +212,7 @@ class AutoTester:
 
     def find_blocked(self) -> tuple[list[Target], list[ProbeResult]]:
         """Что не открывается при выключенном обходе."""
-        engine_module.engine.stop(quiet=True)
+        engine_module.engine.stop(quiet=True, token=self.token)
         time.sleep(0.6)
         results = probe_all(load_targets()[:MAX_TARGETS])
         blocked = [item.target for item in results if not item.ok]
@@ -230,6 +250,8 @@ class AutoTester:
                     strategy, canary, mode,
                     STAGE_FULL if quick_only else STAGE_QUICK,
                 )
+                if score is None:
+                    break  # отменили посреди замера
                 scores.append(score)
                 if on_result:
                     on_result(score)
@@ -253,6 +275,8 @@ class AutoTester:
                         f"«{quick.strategy.title}»"
                     )
                     full = self._measure(quick.strategy, targets, mode, STAGE_FULL)
+                    if full is None:
+                        break
                     scores[scores.index(quick)] = full
                     if on_result:
                         on_result(full)
@@ -260,7 +284,7 @@ class AutoTester:
                         break
         finally:
             # Драйвер мы держали загруженным ради скорости — теперь уберём.
-            engine.stop(quiet=True)
+            engine.stop(quiet=True, token=self.token)
 
         return sorted(
             scores,
@@ -272,12 +296,14 @@ class AutoTester:
         )
 
     def _measure(self, strategy: Strategy, targets: list[Target], mode: str,
-                 stage: str) -> StrategyScore:
-        """Один замер: поднять стратегию, проверить адреса, снять."""
+                 stage: str) -> StrategyScore | None:
+        """Один замер: поднять стратегию, проверить адреса, снять.
+
+        None — замер прервали отменой: это не результат стратегии."""
         engine = engine_module.engine
         score = StrategyScore(strategy=strategy, total=len(targets), stage=stage)
         try:
-            engine.start(strategy, mode, quick=True)
+            engine.start(strategy, mode, quick=True, token=self.token)
         except engine_module.EngineError as exc:
             score.error = str(exc)
             logs.warn(f"Стратегия «{strategy.title}» не запустилась: {exc}")
@@ -285,8 +311,9 @@ class AutoTester:
 
         time.sleep(SETTLE_SECONDS)
         if self.cancelled:
-            engine.stop(quiet=True, keep_driver=True)
-            return score
+            engine.stop(quiet=True, keep_driver=True, token=self.token)
+            # Прерванный замер — не провал стратегии: в итог его не берём.
+            return None
 
         timeout = FAST_TIMEOUT if stage == STAGE_QUICK else TEST_TIMEOUT
         results = probe_all(targets, timeout=timeout)
@@ -303,7 +330,7 @@ class AutoTester:
         latencies = [item.ms for item in results if item.ok]
         score.latency_ms = statistics.median(latencies) if latencies else 0.0
 
-        engine.stop(quiet=True, keep_driver=True)
+        engine.stop(quiet=True, keep_driver=True, token=self.token)
         logs.info(
             f"Стратегия «{strategy.title}»: {score.passed}/{score.total} "
             f"({score.latency_ms:.0f} мс, "

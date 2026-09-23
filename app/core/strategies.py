@@ -14,15 +14,8 @@ from pathlib import Path
 
 from app.core import paths
 
-# Значения GameFilter в точности как в service.bat: порт 12 — это заглушка,
-# которая гарантированно ничего не ловит.
-GAME_FILTER_MODES: dict[str, tuple[str, str, str]] = {
-    "off": ("12", "12", "12"),
-    "all": ("1024-65535", "1024-65535", "1024-65535"),
-    "tcp": ("1024-65535", "1024-65535", "12"),
-    "udp": ("1024-65535", "12", "1024-65535"),
-}
-
+# Значения GameFilter, GameFilterTCP и GameFilterUDP считает game_filter_ports —
+# в точности как service.bat, вместе со своими диапазонами портов.
 GAME_FILTER_LABELS = {
     "off": "выключен",
     "all": "TCP и UDP",
@@ -145,7 +138,7 @@ def _tokenize(raw: str) -> list[str]:
 
 
 def _substitute(tokens: list[str], game_filter: str) -> list[str]:
-    game, tcp, udp = GAME_FILTER_MODES.get(game_filter, GAME_FILTER_MODES["off"])
+    game, tcp, udp = game_filter_ports(game_filter)
     bin_prefix = str(paths.bin_dir()) + os.sep
     lists_prefix = str(paths.lists_dir()) + os.sep
     core_prefix = str(paths.core_dir()) + os.sep
@@ -228,8 +221,8 @@ def load_strategies(game_filter: str = "off") -> list[Strategy]:
 
     now = time.monotonic()
     if _cache and now - _checked.get(game_filter, -RECHECK_SECONDS) < RECHECK_SECONDS:
-        for (cached_filter, _signature), cached in _cache.items():
-            if cached_filter == game_filter:
+        for key, cached in _cache.items():
+            if key[0] == game_filter:
                 return cached
 
     core = paths.core_dir()
@@ -243,7 +236,8 @@ def load_strategies(game_filter: str = "off") -> list[Strategy]:
         ))
     except OSError:
         signature = ()
-    key = (game_filter, signature)
+    # Порты игрового фильтра подставляются в аргументы — они тоже часть ключа.
+    key = (game_filter, game_filter_ports(game_filter), signature)
     _checked[game_filter] = now
     cached = _cache.get(key)
     if cached is not None:
@@ -298,27 +292,142 @@ def build_command_line(strategy: Strategy) -> str:
 # --- Режим GameFilter (файл-флаг совместим с service.bat) ----------------
 
 
-def read_game_filter() -> str:
-    flag = paths.utils_dir() / "game_filter.enabled"
-    if not flag.exists():
-        return "off"
+DEFAULT_GAME_RANGE = "1024-65535"
+_RANGE_ITEM = re.compile(r"^[1-9]\d{0,4}(?:-[1-9]\d{0,4})?$")
+
+
+@dataclass(frozen=True)
+class GameFilterSettings:
+    """Игровой фильтр: режим и диапазоны портов (с ядра 1.10.3 их можно менять)."""
+
+    mode: str = "off"                 # off | all | tcp | udp
+    tcp_range: str = DEFAULT_GAME_RANGE
+    udp_range: str = DEFAULT_GAME_RANGE
+
+
+def validate_port_range(value: str) -> str:
+    """Диапазон вида «1024-1934,1936-65535» — или пустая строка, если он неверен.
+
+    Правила те же, что в service.bat: числа 1–65535, начало не больше конца.
+    """
+    value = value.replace(" ", "")
+    if not value:
+        return ""
+    for item in value.split(","):
+        if not _RANGE_ITEM.match(item):
+            return ""
+        start, _, end = item.partition("-")
+        low, high = int(start), int(end or start)
+        if high > 65535 or low > high:
+            return ""
+    return value
+
+
+def _game_flag() -> Path:
+    return paths.utils_dir() / "game_filter.enabled"
+
+
+def read_game_filter_settings() -> GameFilterSettings:
+    """Файл-флаг так же, как его читает service.bat ядра 1.10.3.
+
+    Строки «ключ=значение»: mode=all|tcp|udp, tcp=<порты>, udp=<порты>.
+    Старый формат — одно слово all, tcp или udp — тоже понимается: строка
+    «tcp» без значения включает режим, «tcp=…» задаёт порты.
+    """
+    flag = _game_flag()
     try:
-        value = flag.read_text(encoding="utf-8", errors="replace").strip().lower()
+        text = flag.read_text(encoding="utf-8", errors="replace") if flag.exists() else ""
     except OSError:
-        return "off"
-    if value in ("all", "tcp", "udp"):
-        return value
-    # service.bat трактует любое иное содержимое как UDP-режим.
-    return "udp" if value else "off"
+        text = ""
+    mode = "disabled"
+    tcp_candidate = udp_candidate = ""
+    for line in text.splitlines():
+        key, _, value = line.strip().partition("=")
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "mode":
+            mode = value.lower()
+        elif key == "all":
+            mode = "all"
+        elif key == "udp":
+            if value:
+                udp_candidate = value
+            else:
+                mode = "udp"
+        elif key == "tcp":
+            if value:
+                tcp_candidate = value
+            else:
+                mode = "tcp"
+    if mode not in ("all", "tcp", "udp"):
+        mode = "off"
+    return GameFilterSettings(
+        mode=mode,
+        tcp_range=validate_port_range(tcp_candidate) or _saved_range("tcp"),
+        udp_range=validate_port_range(udp_candidate) or _saved_range("udp"),
+    )
 
 
-def write_game_filter(mode: str) -> None:
-    flag = paths.utils_dir() / "game_filter.enabled"
-    flag.parent.mkdir(parents=True, exist_ok=True)
+def _saved_range(kind: str) -> str:
+    """Свои порты, заданные в программе: файл при выключенном фильтре удаляется."""
+    from app.core.config import config
+
+    return validate_port_range(str(config.get(f"game_filter_{kind}_range", "") or "")) \
+        or DEFAULT_GAME_RANGE
+
+
+def read_game_filter() -> str:
+    return read_game_filter_settings().mode
+
+
+def game_filter_ports(mode: str | None = None) -> tuple[str, str, str]:
+    """Значения GameFilter, GameFilterTCP и GameFilterUDP — как в service.bat.
+
+    Порт 12 — заглушка, которая гарантированно ничего не ловит.
+    """
+    settings = read_game_filter_settings()
+    mode = settings.mode if mode is None else mode
+    tcp, udp = settings.tcp_range, settings.udp_range
+    if mode == "all":
+        return tcp, tcp, udp
+    if mode == "tcp":
+        return tcp, tcp, "12"
+    if mode == "udp":
+        return udp, "12", udp
+    return "12", "12", "12"
+
+
+def write_game_filter(mode: str, tcp_range: str | None = None,
+                      udp_range: str | None = None) -> None:
+    """Записать файл так, чтобы его поняли и старое ядро, и новое.
+
+    Первая строка — режим одним словом: так его читает service.bat до 1.10.2
+    (он смотрит только на первую строку). Порты — строками «tcp=…», «udp=…»,
+    их читает 1.10.3. Порты не указаны — остаются прежние. Выключенный фильтр
+    — нет файла: любую строку старое ядро приняло бы за «включить UDP».
+    """
+    from app.core.config import config
+
+    flag = _game_flag()
+    current = read_game_filter_settings()
+    tcp = validate_port_range(tcp_range or "") or current.tcp_range
+    udp = validate_port_range(udp_range or "") or current.udp_range
+    config.update({
+        "game_filter_tcp_range": "" if tcp == DEFAULT_GAME_RANGE else tcp,
+        "game_filter_udp_range": "" if udp == DEFAULT_GAME_RANGE else udp,
+    })
     if mode == "off":
         flag.unlink(missing_ok=True)
+        invalidate_cache()
         return
-    flag.write_text(mode, encoding="utf-8")
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    lines = [mode]
+    if tcp != DEFAULT_GAME_RANGE:
+        lines.append(f"tcp={tcp}")
+    if udp != DEFAULT_GAME_RANGE:
+        lines.append(f"udp={udp}")
+    flag.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    invalidate_cache()
 
 
 def local_core_version() -> str:

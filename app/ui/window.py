@@ -972,6 +972,14 @@ class MainWindow(QWidget):
         """
         if not config.get("pause_zapret_with_vpn", True):
             return
+        if engine.testing:
+            # Обход сейчас у проверки стратегий, и status() говорит «выключен».
+            # Решим, когда она вернёт обход: сравним туннели до проверки с
+            # тем, что будет тогда, — первое «до» и есть настоящее.
+            if getattr(self, "_tunnels_before_test", None) is None:
+                self._tunnels_before_test = list(before)
+            self._after_test(self._recheck_vpn_pause)
+            return
 
         if after and not before:
             if not self.context.status.running:
@@ -987,6 +995,34 @@ class MainWindow(QWidget):
             config.set("zapret_paused_by_vpn", False)
             self._show_toast("VPN выключен — возвращаю обход.", "ok")
             QTimer.singleShot(600, lambda: self._auto_toggle(True))
+
+    def _after_test(self, callback) -> None:
+        """Вызвать callback, когда проверка стратегий закончится (один раз)."""
+        pending = getattr(self, "_after_test_callbacks", None)
+        if pending is None:
+            pending = self._after_test_callbacks = []
+        if callback in pending:
+            return
+        pending.append(callback)
+        if len(pending) == 1:
+            QTimer.singleShot(1000, self._poll_test_end)
+
+    def _poll_test_end(self) -> None:
+        if engine.testing:
+            QTimer.singleShot(1000, self._poll_test_end)
+            return
+        pending, self._after_test_callbacks = self._after_test_callbacks, []
+        for callback in pending:
+            callback()
+
+    def _recheck_vpn_pause(self) -> None:
+        """Проверка закончилась — отработать то, что с туннелями было за это время."""
+        before = getattr(self, "_tunnels_before_test", None) or []
+        self._tunnels_before_test = None
+        self.context.refresh_status(force=True)
+        after = self.context.tunnels
+        if after != before:
+            self._tunnel_changed(before, after)
 
     def _auto_toggle(self, start: bool) -> None:
         """Включить или выключить обход тем же путём, что и кнопка на странице."""

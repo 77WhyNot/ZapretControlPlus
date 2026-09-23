@@ -65,11 +65,57 @@ class Engine:
         self._reader: threading.Thread | None = None
         self._lock = threading.RLock()
         self._started_at: float = 0.0
+        # Пока идёт проверка стратегий, обход принадлежит ей. Любой чужой
+        # запуск или остановка снимает все winws.exe — и проверочные копии
+        # вместе с ними, поэтому без её ключа они отклоняются.
+        self._test_token: object | None = None
+        # Запуск и остановка идут строго по одному. Иначе проверка могла
+        # начаться посреди чужого запуска (и служба появлялась бы прямо во
+        # время замеров), а два «Применить» подряд удаляли друг у друга
+        # службу. _lock для этого не годится: его на мгновение берёт
+        # status(), который опрашивается постоянно.
+        self._op_lock = threading.RLock()
         self.on_state_change: Callable[[], None] | None = None
+
+    # --- проверка стратегий ------------------------------------------------
+
+    @property
+    def testing(self) -> bool:
+        return self._test_token is not None
+
+    def exclusive(self) -> threading.RLock:
+        """Ничего не запускать и не останавливать, пока держим: with engine.exclusive()."""
+        return self._op_lock
+
+    def begin_test(self) -> object:
+        """Захватить обход на время проверки. Возвращает ключ для start/stop.
+
+        Запуск или остановка, которые уже идут, сначала доделываются.
+        """
+        with self._op_lock, self._lock:
+            if self._test_token is not None:
+                raise EngineError("Проверка стратегий уже идёт.")
+            token = object()
+            self._test_token = token
+        self._notify()
+        return token
+
+    def end_test(self, token: object) -> None:
+        with self._lock:
+            if self._test_token is token:
+                self._test_token = None
+        self._notify()
+
+    def _check_owner(self, token: object | None) -> None:
+        if self._test_token is not None and token is not self._test_token:
+            raise EngineError("Идёт проверка стратегий — подождите несколько секунд.")
 
     # --- состояние -------------------------------------------------------
 
     def status(self) -> Status:
+        if self._test_token is not None:
+            # Проверочные копии winws — не работающий обход, а часть проверки.
+            return Status(running=False, mode="none", detail="идёт проверка стратегий")
         state = winapi.service_state(SERVICE_NAME)
         if state in ("running", "start_pending"):
             return Status(
@@ -121,12 +167,19 @@ class Engine:
 
     # --- запуск ----------------------------------------------------------
 
-    def start(self, strategy: Strategy, mode: str, quick: bool = False) -> None:
+    def start(self, strategy: Strategy, mode: str, quick: bool = False,
+              token: object | None = None) -> None:
         """quick — для автоподбора: не ждём лишнего и не трогаем драйвер.
 
         При переборе стратегий запуск и остановка повторяются два десятка раз,
         и каждая лишняя секунда превращается в полминуты ожидания.
         """
+        with self._op_lock:
+            self._check_owner(token)
+            self._start(strategy, mode, quick, token)
+
+    def _start(self, strategy: Strategy, mode: str, quick: bool,
+               token: object | None) -> None:
         if not paths.core_is_valid():
             raise EngineError(
                 "Не найдено ядро zapret (bin\\winws.exe). "
@@ -137,7 +190,7 @@ class Engine:
                 "Нужны права администратора: WinDivert загружает драйвер режима ядра."
             )
 
-        self.stop(quiet=True, keep_driver=quick)
+        self.stop(quiet=True, keep_driver=quick, token=token)
         winapi.enable_tcp_timestamps()
 
         if mode == MODE_SERVICE:
@@ -254,12 +307,17 @@ class Engine:
     # --- остановка -------------------------------------------------------
 
     def stop(self, quiet: bool = False, remove_service: bool = True,
-             keep_driver: bool = False) -> None:
+             keep_driver: bool = False, token: object | None = None) -> None:
         """keep_driver — не выгружать WinDivert: пригодится через секунду.
 
         Выгрузка и повторная загрузка драйвера занимают больше времени, чем
         сам запуск, а при автоподборе стратегия меняется каждые пару секунд.
         """
+        with self._op_lock:
+            self._check_owner(token)
+            self._stop(quiet, remove_service, keep_driver)
+
+    def _stop(self, quiet: bool, remove_service: bool, keep_driver: bool) -> None:
         stopped_something = False
 
         with self._lock:
@@ -312,9 +370,10 @@ class Engine:
             except winapi.ServiceError:
                 continue
 
-    def restart(self, strategy: Strategy, mode: str) -> None:
-        self.stop(quiet=True)
-        self.start(strategy, mode)
+    def restart(self, strategy: Strategy, mode: str, token: object | None = None) -> None:
+        with self._op_lock:
+            self.stop(quiet=True, token=token)
+            self.start(strategy, mode, token=token)
 
     # --- служебное -------------------------------------------------------
 
@@ -328,6 +387,17 @@ class Engine:
 
     def shutdown(self, stop_running: bool) -> None:
         """Вызывается при выходе из приложения."""
+        if self._test_token is not None:
+            # Выход посреди проверки. Служба на её время удалена, и вернуть
+            # её может только сама проверка — отменяем и ждём, пока она
+            # уберёт копии winws и поставит обход как был.
+            from app.core import parallel
+
+            if not parallel.cancel_active(timeout=20.0, quitting=True):
+                logs.warn("Проверка стратегий не завершилась вовремя — снимаю её копии")
+                parallel.kill_running()
+                # Службу вернёт следующий запуск: см. parallel.restore_interrupted.
+                return
         if stop_running:
             self.stop(quiet=True)
             return

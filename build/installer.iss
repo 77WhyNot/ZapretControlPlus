@@ -71,7 +71,10 @@ Source: "..\payload\zapret\*"; DestDir: "{app}\core"; \
     Flags: onlyifdoesntexist recursesubdirs createallsubdirs uninsneveruninstall
 
 ; Движок VPN. Обновляется только вместе с программой, поэтому ignoreversion.
+; cache.db — кэш sing-box с машины, где собирали (он появляется, если движок
+; запускали из payload): в установщике ему не место.
 Source: "..\payload\singbox\*"; DestDir: "{app}\singbox"; \
+    Excludes: "cache.db"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]

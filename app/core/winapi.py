@@ -285,6 +285,43 @@ def process_path(pid: int) -> str:
         kernel32.CloseHandle(handle)
 
 
+class FILETIME(ctypes.Structure):
+    _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+
+kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(FILETIME)] * 4
+kernel32.GetProcessTimes.restype = wintypes.BOOL
+
+
+def process_started(pid: int) -> int:
+    """Время запуска процесса (в единицах FILETIME) или 0, если процесса нет.
+
+    PID в Windows переиспользуются, поэтому «свой» процесс узнаём по паре
+    PID + время запуска: так после сбоя не снимем чужой, получивший тот же номер.
+    """
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return 0
+    try:
+        created, exited, kernel, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+        if not kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                        ctypes.byref(kernel), ctypes.byref(user)):
+            return 0
+        return (created.dwHighDateTime << 32) | created.dwLowDateTime
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def kill_pid(pid: int) -> bool:
+    handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+    if not handle:
+        return False
+    try:
+        return bool(kernel32.TerminateProcess(handle, 1))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def find_processes_by_path(name: str, executable: str) -> list[int]:
     """Только те процессы с этим именем, что запущены из указанного файла.
 
@@ -633,6 +670,113 @@ def list_adapters() -> list[NetAdapter]:
             node = item.Next
         return result
     return []
+
+
+class MIB_IPFORWARDROW(ctypes.Structure):
+    _fields_ = [
+        ("dwForwardDest", wintypes.DWORD), ("dwForwardMask", wintypes.DWORD),
+        ("dwForwardPolicy", wintypes.DWORD), ("dwForwardNextHop", wintypes.DWORD),
+        ("dwForwardIfIndex", wintypes.DWORD), ("dwForwardType", wintypes.DWORD),
+        ("dwForwardProto", wintypes.DWORD), ("dwForwardAge", wintypes.DWORD),
+        ("dwForwardNextHopAS", wintypes.DWORD), ("dwForwardMetric1", wintypes.DWORD),
+        ("dwForwardMetric2", wintypes.DWORD), ("dwForwardMetric3", wintypes.DWORD),
+        ("dwForwardMetric4", wintypes.DWORD), ("dwForwardMetric5", wintypes.DWORD),
+    ]
+
+
+iphlpapi.GetIpForwardTable.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.ULONG),
+                                       wintypes.BOOL]
+iphlpapi.GetIpForwardTable.restype = wintypes.DWORD
+
+
+@dataclass(frozen=True)
+class PhysicalInterface:
+    """Настоящий выход в интернет — мимо любых туннелей VPN."""
+
+    index: int
+    name: str
+    address: str      # свой IPv4 на этом адаптере; "0.0.0.0", если не узнали
+    gateway: str
+
+
+def _adapters_by_index() -> dict[int, tuple[str, str, int, bool]]:
+    """Индекс адаптера → (GUID, имя, тип, поднят ли)."""
+    flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+    size = wintypes.ULONG(32 * 1024)
+    for _ in range(4):
+        buffer = ctypes.create_string_buffer(size.value)
+        pointer = ctypes.cast(buffer, ctypes.POINTER(IP_ADAPTER_ADDRESSES))
+        rc = iphlpapi.GetAdaptersAddresses(AF_UNSPEC, flags, None, pointer, ctypes.byref(size))
+        if rc == ERROR_BUFFER_OVERFLOW:
+            continue
+        if rc != 0:
+            return {}
+        result: dict[int, tuple[str, str, int, bool]] = {}
+        node = pointer
+        while node:
+            item = node.contents
+            guid = (item.AdapterName or b"").decode("ascii", errors="replace")
+            result[int(item.IfIndex)] = (
+                guid, item.FriendlyName or "", int(item.IfType),
+                int(item.OperStatus) == IF_OPER_STATUS_UP,
+            )
+            node = item.Next
+        return result
+    return {}
+
+
+def _registry_ipv4(guid: str) -> str:
+    path = rf"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{guid}"
+    for name in ("DhcpIPAddress", "IPAddress"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+                value, _ = winreg.QueryValueEx(key, name)
+        except OSError:
+            continue
+        if isinstance(value, list):
+            value = next((item for item in value if item), "")
+        if value and value != "0.0.0.0":
+            return str(value)
+    return "0.0.0.0"
+
+
+def physical_interface() -> PhysicalInterface | None:
+    """Адаптер, через который идёт маршрут по умолчанию, если отбросить VPN.
+
+    Свой туннель VPN (и любой чужой) забирает весь трафик маршрутами
+    0.0.0.0/1 и 128.0.0.0/1. Проверке стратегий нужен настоящий выход в
+    интернет — через него соединения и отправляются (IP_UNICAST_IF).
+    """
+    size = wintypes.ULONG(0)
+    iphlpapi.GetIpForwardTable(None, ctypes.byref(size), False)
+    if not size.value:
+        return None
+    buffer = ctypes.create_string_buffer(size.value)
+    if iphlpapi.GetIpForwardTable(buffer, ctypes.byref(size), True) != 0:
+        return None
+    count = ctypes.cast(buffer, ctypes.POINTER(wintypes.DWORD))[0]
+    rows = ctypes.cast(ctypes.addressof(buffer) + ctypes.sizeof(wintypes.DWORD),
+                       ctypes.POINTER(MIB_IPFORWARDROW))
+    adapters = _adapters_by_index()
+    vpn_names = {item.name for item in active_vpn_adapters()}
+    best: tuple[int, PhysicalInterface] | None = None
+    for position in range(count):
+        row = rows[position]
+        if row.dwForwardDest != 0 or row.dwForwardMask != 0:
+            continue  # нужен именно маршрут по умолчанию
+        info = adapters.get(int(row.dwForwardIfIndex))
+        if info is None:
+            continue
+        guid, name, if_type, up = info
+        if not up or name in vpn_names or if_type in (IF_TYPE_PPP, IF_TYPE_TUNNEL):
+            continue
+        gateway = ".".join(str((row.dwForwardNextHop >> shift) & 0xFF) for shift in (0, 8, 16, 24))
+        candidate = PhysicalInterface(int(row.dwForwardIfIndex), name,
+                                      _registry_ipv4(guid), gateway)
+        metric = int(row.dwForwardMetric1)
+        if best is None or metric < best[0]:
+            best = (metric, candidate)
+    return best[1] if best else None
 
 
 VPN_KEYWORDS = (

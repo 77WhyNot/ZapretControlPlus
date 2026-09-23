@@ -170,10 +170,6 @@ def install_core_update(info: UpdateInfo, progress: Progress | None = None) -> s
 
     core = paths.core_dir()
     engine = engine_module.engine
-    status = engine.status()
-    was_running = status.running and not status.external
-    previous_mode = status.mode
-    previous_strategy = status.strategy_id or str(config.get("last_strategy"))
 
     with tempfile.TemporaryDirectory(prefix="zapret-update-") as tmp:
         tmpdir = Path(tmp)
@@ -197,48 +193,64 @@ def install_core_update(info: UpdateInfo, progress: Progress | None = None) -> s
         payload = _find_payload_root(unpacked)
 
         report("Остановка обхода…", 70)
-        engine.stop(quiet=True)
+        # Остановка, замена файлов и перезапуск — одним куском. Проверка
+        # стратегий, начатая посередине, застала бы обход «выключенным» и
+        # не вернула бы его, а её копии winws брали бы файлы, которые мы меняем.
+        with engine.exclusive():
+            if engine.testing:
+                raise RuntimeError("Идёт проверка стратегий — обновление ядра поставлю позже.")
+            # Состояние — сейчас, а не до скачивания: за это время обход могли
+            # включить или выключить.
+            status = engine.status()
+            was_running = status.running and not status.external
+            previous_mode = status.mode
+            previous_strategy = status.strategy_id or str(config.get("last_strategy"))
+            engine.stop(quiet=True)
 
-        report("Сохранение ваших списков…", 75)
-        preserved = tmpdir / "preserved"
-        _snapshot_preserved(core, preserved)
+            report("Сохранение ваших списков…", 75)
+            preserved = tmpdir / "preserved"
+            _snapshot_preserved(core, preserved)
 
-        report("Установка файлов…", 80)
-        core.mkdir(parents=True, exist_ok=True)
-        # Старые стратегии убираем, иначе исчезнувшие из релиза останутся навсегда.
-        for old in core.glob("*.bat"):
-            try:
-                old.unlink()
-            except OSError:
-                pass
-        _copy_tree(payload, core)
+            report("Установка файлов…", 80)
+            core.mkdir(parents=True, exist_ok=True)
+            # Старые стратегии убираем, иначе исчезнувшие из релиза останутся навсегда.
+            for old in core.glob("*.bat"):
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+            _copy_tree(payload, core)
 
-        report("Возврат ваших настроек…", 92)
-        _restore_preserved(preserved, core)
+            report("Возврат ваших настроек…", 92)
+            _restore_preserved(preserved, core)
 
-    if was_running:
-        report("Перезапуск обхода…", 96)
-        game_filter = strategies.read_game_filter()
-        strategy = strategies.find_strategy(previous_strategy, game_filter)
-        if strategy is None:
-            # Стратегию могли переименовать в новом ядре — обход всё равно
-            # должен вернуться, а не остаться молча выключенным.
-            strategy = strategies.find_strategy("general", game_filter)
-            if strategy is None:
-                fallback = strategies.load_strategies(game_filter)
-                strategy = fallback[0] if fallback else None
-            if strategy is not None:
-                config.set("last_strategy", strategy.id)
-        if strategy is not None:
-            try:
-                engine.start(strategy, previous_mode)
-            except engine_module.EngineError as exc:
-                logs.warn(f"Не удалось перезапустить обход: {exc}")
+            if was_running:
+                report("Перезапуск обхода…", 96)
+                _restart_after_update(engine, previous_strategy, previous_mode)
 
     report("Готово", 100)
     new_version = core_version()
     logs.info(f"Ядро zapret обновлено до версии {new_version}")
     return new_version
+
+
+def _restart_after_update(engine, previous_strategy: str, previous_mode: str) -> None:
+    game_filter = strategies.read_game_filter()
+    strategy = strategies.find_strategy(previous_strategy, game_filter)
+    if strategy is None:
+        # Стратегию могли переименовать в новом ядре — обход всё равно
+        # должен вернуться, а не остаться молча выключенным.
+        strategy = strategies.find_strategy("general", game_filter)
+        if strategy is None:
+            fallback = strategies.load_strategies(game_filter)
+            strategy = fallback[0] if fallback else None
+        if strategy is not None:
+            config.set("last_strategy", strategy.id)
+    if strategy is not None:
+        try:
+            engine.start(strategy, previous_mode)
+        except engine_module.EngineError as exc:
+            logs.warn(f"Не удалось перезапустить обход: {exc}")
 
 
 def _copy_tree(source: Path, destination: Path) -> None:
