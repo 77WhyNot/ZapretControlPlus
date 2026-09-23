@@ -14,13 +14,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
-
 from app.core import logs, paths
 from app.core.config import config
 from app.core.constants import USER_AGENT
 from app.core.vpn import xray
 from app.core.vpn.links import Server, parse_many
+from app.core.lazy import requests  # сеть подгружается при первом обращении
 
 FETCH_TIMEOUT = (8, 25)
 # Часть панелей отдаёт разный формат в зависимости от клиента.

@@ -99,7 +99,7 @@ class DnsPage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "DNS",
+            "Smart DNS",
             "Smart DNS отдаёт другой адрес сервисам, которые режут доступ по "
             "стране. Работает вместе с zapret и не мешает VPN.",
             parent,

@@ -75,6 +75,11 @@ class _LogBridge(logging.Handler):
             if now - _LogBridge._last_stats < self.STATS_EVERY:
                 return
             _LogBridge._last_stats = now
+        elif record.levelno < logging.WARNING:
+            # Остальные сведения прокси — жизнь отдельных соединений («пул»,
+            # «переключил домен CF», «резервный путь»). За три дня их
+            # набиралась не одна сотня строк, а пользы при разборе — ноль.
+            return
         elif record.levelno < logging.ERROR and any(
                 marker in text for marker in self.ROUTINE):
             return

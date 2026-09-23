@@ -361,26 +361,47 @@ class VpnAppsPage(Page):
     def _cards_ready(self, entries) -> None:
         self._loading = False
         self.btn_refresh.setEnabled(True)
-        self._entries = list(entries)
-
-        clear_layout(self.grid)
-        self._cards = []
-
+        entries = list(entries)
         mode = self._current_mode()
         selected = {name.lower() for name in self._selected_names()}
         lane = self._lane_token()
 
-        for index, entry in enumerate(self._entries):
-            card = AppCard(self.context, entry, entry.key in selected,
-                           lane, self.grid_host)
-            card.toggled.connect(self._on_card_toggled)
-            card.setEnabled(mode != vpn_config.MODE_ALL)
-            self.grid.addWidget(card, index // CARD_COLUMNS, index % CARD_COLUMNS)
-            self._cards.append(card)
+        # Список тот же — карточки не пересоздаём, только сверяем отметки.
+        # Раньше каждое открытие вкладки заново строило все карточки с
+        # иконками, и первые доли секунды они были видны сплющенными.
+        signature = [(entry.key, entry.title, entry.running, str(entry.path))
+                     for entry in entries]
+        if self._cards and signature == getattr(self, "_signature", None):
+            for card in self._cards:
+                wanted = card.entry.key in selected
+                if card.switch.isChecked() != wanted:
+                    card.set_active(wanted)
+                card.setEnabled(mode != vpn_config.MODE_ALL)
+            self._update_summary()
+            return
+        self._signature = signature
+        self._entries = entries
 
-        self.empty_hint.setVisible(not self._cards)
-        self.grid_host.setVisible(bool(self._cards))
-        self._filter(self.search.text())
+        self.grid_host.setUpdatesEnabled(False)
+        try:
+            clear_layout(self.grid)
+            self._cards = []
+            for index, entry in enumerate(self._entries):
+                card = AppCard(self.context, entry, entry.key in selected,
+                               lane, self.grid_host)
+                card.toggled.connect(self._on_card_toggled)
+                card.setEnabled(mode != vpn_config.MODE_ALL)
+                self.grid.addWidget(card, index // CARD_COLUMNS, index % CARD_COLUMNS)
+                self._cards.append(card)
+
+            self.empty_hint.setVisible(not self._cards)
+            self.grid_host.setVisible(bool(self._cards))
+            self._filter(self.search.text())
+            # Раскладываем сразу, до первой отрисовки, а не следующим проходом.
+            self.grid.activate()
+            self.body.activate()
+        finally:
+            self.grid_host.setUpdatesEnabled(True)
         self._update_summary()
 
     def _restart_if_running(self, reason: str) -> None:

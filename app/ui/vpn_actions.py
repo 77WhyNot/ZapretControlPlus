@@ -28,6 +28,19 @@ def desired_enabled() -> bool:
     return bool(config.get("vpn_autostart", False))
 
 
+def _restart_zapret(strategy, mode: str) -> None:
+    """Перезапустить обход, чтобы он перечитал исключения. Не вышло — не беда:
+    VPN всё равно поднимаем, а причину пишем в журнал."""
+    from app.core import logs
+    from app.core.engine import engine as zapret_engine
+
+    logs.info("Исключения zapret изменились — перезапускаю обход, чтобы он их прочитал")
+    try:
+        zapret_engine.restart(strategy, mode)
+    except Exception as exc:  # noqa: BLE001
+        logs.warn(f"Обход не перезапустился: {exc}")
+
+
 def _settings(context: AppContext) -> dict:
     return {
         "servers": context.servers(),
@@ -60,12 +73,20 @@ def start(parent: QObject, context: AppContext,
         return None
 
     auto_exclude = bool(config.get("vpn_auto_exclude", True))
+    # Что сейчас с обходом — узнаём здесь, в потоке окна: в фоне будет поздно.
+    zapret_strategy = context.current_strategy() if context.status.running else None
+    zapret_mode = str(config.get("run_mode"))
     worker = Worker(parent)
 
     def job() -> bool:
         # Иначе zapret порежет трафик до самого VPN-сервера.
         if auto_exclude:
-            integration.sync_excludes(settings["servers"])
+            _count, changed = integration.sync_excludes(settings["servers"])
+            if changed and zapret_strategy is not None:
+                # winws читает исключения только при запуске. Без перезапуска
+                # новые адреса серверов (после обновления подписки) остались бы
+                # для него чужими, и он резал бы соединение с самим VPN.
+                _restart_zapret(zapret_strategy, zapret_mode)
         vpn_engine.on_progress = lambda text: worker.progress.emit(text, 0)
         try:
             vpn_engine.start(

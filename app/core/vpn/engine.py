@@ -7,11 +7,12 @@
 * в режиме «Туннель» при живом чужом туннеле мы просто не стартуем и
   объясняем почему; в режиме «Прокси» уживаемся с кем угодно;
 * убираем только своё: свой процесс (по пути к файлу) и свой адаптер
-  (по имени), и только если они остались от прошлого запуска.
+  (по GUID, который выводится из имени), и только когда свой движок стоит.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -19,15 +20,16 @@ import socket
 import subprocess
 import threading
 import time
+import uuid
+import winreg
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-import requests
-
 from app.core import logs, netadapters, paths, sysproxy, winapi
 from app.core.vpn import config as config_module
 from app.core.vpn.links import Server
+from app.core.lazy import requests  # сеть подгружается при первом обращении
 
 SINGBOX_EXE = "sing-box.exe"
 # Wintun на Windows создаётся долго, особенно если адаптер уже был занят.
@@ -76,38 +78,64 @@ def _free_port(preferred: int = 9797) -> int:
     return preferred
 
 
-def own_adapter_present() -> bool:
-    """Наш адаптер остался в системе (движок упал или его сняли силой)."""
-    wanted = config_module.TUN_NAME.lower()
+WINTUN_ENUM_KEY = r"SYSTEM\CurrentControlSet\Enum\SWD\Wintun"
+
+
+def adapter_guid(name: str = config_module.TUN_NAME) -> str:
+    """GUID, который sing-box даёт адаптеру Wintun: md5("wintun" + имя).
+
+    Устройство у всех клиентов на sing-box называется одинаково — «sing-tun
+    Tunnel», и по имени свой адаптер от чужого (Happ, Hiddify) не отличить.
+    А GUID выводится из имени интерфейса, и у нас он свой.
+    """
+    digest = hashlib.md5(b"wintun" + name.encode("utf-8")).digest()
+    return "{" + str(uuid.UUID(bytes_le=digest)).upper() + "}"
+
+
+def own_adapter_present(name: str = config_module.TUN_NAME) -> bool:
+    """Наш адаптер работает как сетевой интерфейс."""
+    wanted = name.lower()
     return any(adapter.name.lower() == wanted for adapter in winapi.list_adapters())
 
 
-def remove_own_adapter() -> bool:
-    """Убрать только свой адаптер — по имени, ничего чужого.
+def own_device_registered(name: str = config_module.TUN_NAME) -> bool:
+    """Устройство нашего адаптера записано в системе — живое или «призрак».
 
-    Брошенный адаптер держит маршрут по умолчанию, и трафик уходит в него
-    как в чёрную дыру. Wintun обычно удаляет его сам, но после падения
-    процесса он остаётся.
+    Если sing-box остановить силой, Wintun не успевает убрать устройство.
+    Сетевого интерфейса уже нет, а устройство с нашим GUID осталось, и
+    следующий запуск 15 секунд бьётся в «Cannot create a file when that file
+    already exists», прежде чем сдаться.
     """
-    if not own_adapter_present():
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            f"{WINTUN_ENUM_KEY}\\{adapter_guid(name)}"):
+            return True
+    except OSError:
         return False
-    name = config_module.TUN_NAME
-    code, _ = winapi.run_hidden(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-         f"Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | "
-         f"Where-Object {{ $_.FriendlyName -eq '{name}' }} | "
-         "ForEach-Object { pnputil /remove-device $_.InstanceId | Out-Null }"],
-        timeout=30,
-    )
-    if code != 0 or own_adapter_present():
+
+
+def remove_own_adapter(name: str = config_module.TUN_NAME) -> bool:
+    """Убрать свой адаптер — по его GUID, ничего чужого.
+
+    Брошенный адаптер держит маршрут по умолчанию, а его «призрак» не даёт
+    создать новый. Возвращает True, если было что убирать.
+    """
+    present = own_adapter_present(name)
+    if not present and not own_device_registered(name):
+        return False
+    started = time.monotonic()
+    winapi.run_hidden(["pnputil", "/remove-device", f"SWD\\Wintun\\{adapter_guid(name)}"],
+                      timeout=20)
+    if own_adapter_present(name):
         # Хотя бы обесточить: выключенный адаптер маршрутов не держит.
         winapi.run_hidden(
             ["netsh", "interface", "set", "interface", f"name={name}", "admin=disabled"],
             timeout=20,
         )
-    gone = not own_adapter_present()
-    logs.info("Свой брошенный адаптер убран" if gone
-              else "Свой брошенный адаптер выключен")
+    gone = not own_adapter_present(name) and not own_device_registered(name)
+    took = time.monotonic() - started
+    what = "адаптер" if present else "след адаптера"
+    logs.info(f"Свой {what} убран за {took:.1f} с" if gone else f"Свой {what} выключен")
     return True
 
 
@@ -666,8 +694,10 @@ class VpnEngine:
         self._proxy_applied = False
 
         if stopped and transport == config_module.TRANSPORT_TUN:
-            # Wintun убирает адаптер сам; если не успел — уберём свой.
-            time.sleep(0.8)
+            # Процесс снят силой, и Wintun не успел убрать устройство: без
+            # уборки следующий запуск 15 секунд бьётся о его «призрак». Сама
+            # уборка — десятая доля секунды.
+            time.sleep(0.2)
             try:
                 remove_own_adapter()
             except Exception as exc:  # noqa: BLE001

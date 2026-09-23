@@ -132,6 +132,7 @@ class UpdatesPage(Page):
     def _core_check_failed(self, message: str, manual: bool) -> None:
         self.btn_core_check.setEnabled(True)
         self.core_spinner.stop()
+        updater.mark_checked(failed=True)
         self.core_badge.update_state("нет связи", "warn")
         self.core_status.setText(message)
         if manual:
@@ -141,7 +142,7 @@ class UpdatesPage(Page):
         self.btn_core_check.setEnabled(True)
         self.core_spinner.stop()
         self._core_info = info
-        updater.mark_checked()
+        updater.mark_checked(failed=bool(info.error))
 
         self.core_current.set_value(info.current)
         self.core_latest.set_value(info.latest)
@@ -302,6 +303,7 @@ class UpdatesPage(Page):
     def _app_check_failed(self, message: str, manual: bool) -> None:
         self.btn_app_check.setEnabled(True)
         self.app_spinner.stop()
+        updater.mark_checked(failed=True)
         self.app_badge.update_state("нет связи", "warn")
         if manual:
             self.context.error(message)
@@ -313,6 +315,8 @@ class UpdatesPage(Page):
         self.app_latest.set_value(info.latest)
 
         if info.error:
+            # Не дошли до GitHub — попробуем снова через полчаса, а не через 12 часов.
+            updater.mark_checked(failed=True)
             self.app_badge.update_state("нет связи", "warn")
             self.app_status.setText(info.error)
             if manual:

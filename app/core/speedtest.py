@@ -19,10 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
-import requests
-
 from app.core import logs
 from app.core.constants import USER_AGENT
+from app.core.lazy import requests  # сеть подгружается при первом обращении
 
 CLOUDFLARE_DOWN = "https://speed.cloudflare.com/__down?bytes={bytes}"
 CLOUDFLARE_UP = "https://speed.cloudflare.com/__up"

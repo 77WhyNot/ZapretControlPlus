@@ -85,6 +85,11 @@ def _selftest() -> int:
     from app.ui.window import PAGES, MainWindow
 
     print(f"стратегий: {len(strategies.load_strategies('off'))}")
+
+    # Сеть подгружается отложенно — убеждаемся, что библиотека попала в сборку.
+    from app.core.lazy import requests as lazy_requests
+
+    print(f"сеть: {'ок' if lazy_requests.Session else 'НЕТ'}")
     print(f"версия ядра: {strategies.local_core_version()}")
     print(f"целей: {len(autotest.load_targets())}")
     print(f"проверок: {len(diagnostics.ALL_CHECKS)}")

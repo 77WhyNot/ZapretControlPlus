@@ -30,6 +30,9 @@ from app.core.strategies import Strategy
 MODE_PROCESS = "process"
 MODE_SERVICE = "service"
 
+# Строки вывода winws, которые в журнал не пишем: см. _pump_output.
+WINWS_NOISE = ("Loading hostlist", "Loading ipset", "loading plain text list")
+
 
 @dataclass(frozen=True)
 class Status:
@@ -194,7 +197,10 @@ class Engine:
         try:
             for raw in iter(stream.readline, b""):
                 line = winapi.decode_console(raw).rstrip()
-                if line:
+                # На каждый список winws пишет три строки: «Loading…»,
+                # «loading plain text list» и «Loaded N». Смысл только в
+                # последней, а при автоподборе списки грузятся десятки раз.
+                if line and not line.startswith(WINWS_NOISE):
                     logs.write(line, "WINWS")
         except (OSError, ValueError):
             pass

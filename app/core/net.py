@@ -12,11 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
-import requests
-
 from app.core import logs
 from app.core.config import config
 from app.core.constants import HTTP_TIMEOUT, USER_AGENT
+from app.core.lazy import requests  # сеть подгружается при первом обращении
 
 CONNECT_TIMEOUT = 7
 READ_TIMEOUT = HTTP_TIMEOUT

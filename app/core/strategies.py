@@ -206,10 +206,16 @@ def _natural_key(name: str) -> list[object]:
 
 
 _cache: dict[tuple, list[Strategy]] = {}
+# Сверка файлов на диске — обход папки и два десятка обращений к файлам.
+# Список спрашивают по многу раз подряд (на запуске — два десятка раз),
+# поэтому сверяемся не чаще раза в пару секунд.
+RECHECK_SECONDS = 2.0
+_checked: dict[str, float] = {}
 
 
 def invalidate_cache() -> None:
     _cache.clear()
+    _checked.clear()
 
 
 def load_strategies(game_filter: str = "off") -> list[Strategy]:
@@ -218,6 +224,14 @@ def load_strategies(game_filter: str = "off") -> list[Strategy]:
     Разбор 21 файла заметен на глаз, а вызывается он при каждом открытии
     страницы — поэтому результат кэшируется до изменения файлов.
     """
+    import time
+
+    now = time.monotonic()
+    if _cache and now - _checked.get(game_filter, -RECHECK_SECONDS) < RECHECK_SECONDS:
+        for (cached_filter, _signature), cached in _cache.items():
+            if cached_filter == game_filter:
+                return cached
+
     core = paths.core_dir()
     if not core.is_dir():
         return []
@@ -230,6 +244,7 @@ def load_strategies(game_filter: str = "off") -> list[Strategy]:
     except OSError:
         signature = ()
     key = (game_filter, signature)
+    _checked[game_filter] = now
     cached = _cache.get(key)
     if cached is not None:
         return cached
@@ -243,6 +258,8 @@ def load_strategies(game_filter: str = "off") -> list[Strategy]:
         except (StrategyError, OSError):
             continue
     _cache.clear()
+    _checked.clear()
+    _checked[game_filter] = now
     _cache[key] = found
     return found
 

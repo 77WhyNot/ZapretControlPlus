@@ -55,9 +55,9 @@ class AboutPage(Page):
         title.setStyleSheet("font-size: 20px; font-weight: 650;")
         text_box.addWidget(title)
         text_box.addWidget(muted_label(
-            "Удобная оболочка для zapret — набора стратегий обхода "
-            "блокировок по методу дефрагментации TLS. Всё, что раньше "
-            "делалось через .bat-файлы и меню в консоли, собрано в одном окне."
+            "Обход блокировок, VPN по программам, прокси Telegram и Smart DNS — "
+            "в одном окне. В основе обхода — zapret: стратегии, которые раньше "
+            "запускали .bat-файлами и меню в консоли."
         ))
         author = QLabel(f"Автор — {APP_AUTHOR_FULL}")
         author.setStyleSheet("font-weight: 600; margin-top: 4px;")
@@ -122,10 +122,16 @@ class AboutPage(Page):
             "разное, поэтому универсальной стратегии нет — нужную подбирают "
             "перебором. Для этого в программе есть автоподбор."
         ))
+        card.add(muted_label(
+            "VPN устроен иначе: трафик выбранных программ уходит через сервер "
+            "вашей подписки, и сайт видит адрес сервера, а не ваш. Туннель "
+            "поднимает движок sing-box, а программа решает, кому идти через "
+            "него, а кому напрямую — там трафик подхватывает zapret."
+        ))
         card.add(Divider())
         card.add(faint_label(
-            "Программа не является VPN и не скрывает ваш IP-адрес. "
-            "Она лишь мешает оборудованию провайдера опознать соединение."
+            "Сам обход DPI не скрывает ваш IP-адрес — он лишь мешает "
+            "оборудованию провайдера опознать соединение. Адрес меняет только VPN."
         ))
         self.body.addWidget(card)
 
@@ -158,11 +164,11 @@ class AboutPage(Page):
              "https://xbox-dns.ru/"),
         )
         for row, (name, description, url) in enumerate(entries):
+            # Цвет ссылки задаёт палитра окна (под тему), а не стиль подписи:
+            # стиль до текста ссылки не доходит, и в тёмной теме она тонула.
             label = QLabel(f'<a href="{url}">{name}</a>')
             label.setOpenExternalLinks(True)
-            label.setStyleSheet(
-                f"color: {self.context.color('accent_text')}; font-weight: 600;"
-            )
+            label.setStyleSheet("font-weight: 600;")
             grid.addWidget(label, row, 0)
             grid.addWidget(faint_label(description), row, 1)
         grid.setColumnStretch(1, 1)

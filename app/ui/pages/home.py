@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QRectF,
     Qt,
     QTimer,
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -50,6 +51,29 @@ from app.ui.widgets import (
 DNS_DEFAULT_PRESET = "xbox"
 
 
+class TintBadge(QWidget):
+    """Подложка значка на плитке. Рисуется сама, а не стилем: её цвет плавно
+    перетекает, и стиль пришлось бы заново применять на каждом кадре."""
+
+    def __init__(self, size: int, radius: float, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self._radius = radius
+        self._color = QColor("#EEF1F5")
+
+    def set_color(self, color) -> None:
+        self._color = QColor(color)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._color)
+        painter.drawRoundedRect(QRectF(self.rect()), self._radius, self._radius)
+        painter.end()
+
+
 class QuickTile(QFrame):
     """Плитка главной функции: значок, название, состояние, выбор и тумблер."""
 
@@ -69,8 +93,7 @@ class QuickTile(QFrame):
 
         top = QHBoxLayout()
         top.setSpacing(12)
-        self.badge = QLabel(self)
-        self.badge.setFixedSize(40, 40)
+        self.badge = TintBadge(40, 12, self)
         badge_layout = QHBoxLayout(self.badge)
         badge_layout.setContentsMargins(0, 0, 0, 0)
         self.icon = IconLabel(icon_name, context.color("text_faint"), 20, self.badge)
@@ -152,18 +175,21 @@ class QuickTile(QFrame):
 
     def _paint_badge(self, color) -> None:
         self._badge_color = QColor(color)
-        self.badge.setStyleSheet(
-            f"background: {self._badge_color.name()}; border-radius: 12px;"
-        )
+        self.badge.set_color(self._badge_color)
 
     def _restyle(self) -> None:
         lane = self.context.color(self.lane_token)
         border = lane if self._on else self.context.color("border")
-        self.setStyleSheet(
+        style = (
             f"QFrame#Tile {{ background: {self.context.color('surface')}; "
             f"border: 1px solid {border}; border-radius: 14px; }}"
             f"QFrame#Tile:hover {{ border-color: {lane}; }}"
         )
+        # Стиль плитки заново разбирается для всех её виджетов — это ~5 мс.
+        # Если он не изменился, не трогаем.
+        if style != getattr(self, "_style", ""):
+            self._style = style
+            self.setStyleSheet(style)
 
     def apply_theme(self) -> None:
         color = self.context.color(self.lane_token)
@@ -587,10 +613,14 @@ class HomePage(Page):
 
     def _set_state(self, title: str, detail: str, active: bool) -> None:
         """Смена заголовка с коротким проявлением, а не рывком."""
-        self.state_dot.setStyleSheet(
+        dot_style = (
             f"font-size: 15px; background: transparent; color: "
             f"{self.context.color('success' if active else 'text_faint')};"
         )
+        # Обновление экрана идёт раз в пару секунд; стиль — только если изменился.
+        if dot_style != getattr(self, "_dot_style", ""):
+            self._dot_style = dot_style
+            self.state_dot.setStyleSheet(dot_style)
         self.state_detail.setText(detail)
         if self.state_title.text() == title:
             return

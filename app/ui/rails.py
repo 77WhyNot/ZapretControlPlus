@@ -173,10 +173,14 @@ class LaneRow(QWidget):
 
     def set_active(self, active: bool) -> None:
         self.track.set_active(active)
-        self.label.setStyleSheet(
+        style = (
             f"color: {self.context.color(self.color_token)};" if active
             else f"color: {self.context.color('text_faint')};"
         )
+        # Схема обновляется при каждом опросе — стиль меняем, только если есть что.
+        if style != getattr(self, "_label_style", ""):
+            self._label_style = style
+            self.label.setStyleSheet(style)
 
     def set_chips(self, items: list[str]) -> None:
         """Ярлыки переиспользуем: раньше их удаляли и создавали заново на

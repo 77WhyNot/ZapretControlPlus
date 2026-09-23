@@ -31,7 +31,7 @@ class ListsPage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "Списки",
+            "Списки сайтов",
             "Что обходить, а что трогать не нужно. Изменения применяются "
             "после перезапуска обхода.",
             parent,

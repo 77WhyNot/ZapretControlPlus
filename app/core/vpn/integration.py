@@ -58,17 +58,25 @@ def _to_cidr(address: str) -> str | None:
 
 
 def collect_server_cidrs(servers: list[Server]) -> list[str]:
+    return sorted(_collect(servers)[0])
+
+
+def _collect(servers: list[Server]) -> tuple[set[str], int]:
+    """Адреса серверов и число имён, которые не удалось разрешить."""
     hosts = sorted({server.host for server in servers if server.host})
     if not hosts:
-        return []
+        return set(), 0
     result: set[str] = set()
+    failed = 0
     with ThreadPoolExecutor(max_workers=min(RESOLVE_WORKERS, len(hosts))) as pool:
         for addresses in pool.map(resolve_host, hosts):
+            if not addresses:
+                failed += 1
             for address in addresses:
                 cidr = _to_cidr(address)
                 if cidr:
                     result.add(cidr)
-    return sorted(result)
+    return result, failed
 
 
 def _exclude_path():
@@ -86,7 +94,12 @@ def _read_lines() -> list[str]:
 def sync_excludes(servers: list[Server]) -> tuple[int, bool]:
     """Обновить исключения zapret. Возвращает (сколько адресов, было ли изменение)."""
     managed_before = set(config.get(MANAGED_KEY, []) or [])
-    wanted = set(collect_server_cidrs(servers))
+    wanted, failed = _collect(servers)
+    if failed:
+        # Какое-то имя не разрешилось (сеть моргнула) — старые адреса не
+        # выбрасываем: лишний адрес в исключениях безвреден, а пропавший
+        # заставил бы zapret резать соединение с сервером.
+        wanted |= managed_before
 
     if wanted == managed_before and _exclude_path().exists():
         existing = set(_read_lines())

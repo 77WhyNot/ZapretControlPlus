@@ -350,10 +350,20 @@ def is_check_due() -> bool:
     return (time.time() - last) > interval
 
 
-def mark_checked() -> None:
+# Если проверить не удалось (нет сети — например, сразу после сна), не ждём
+# полсуток до следующей попытки, а пробуем снова примерно через полчаса.
+RETRY_AFTER_FAILURE = 25 * 60
+
+
+def mark_checked(failed: bool = False) -> None:
     import time
 
-    config.set("last_update_check", int(time.time()))
+    now = time.time()
+    if failed:
+        interval = float(config.get("update_check_interval_hours", 12)) * 3600
+        # Проверка «наступит» через RETRY_AFTER_FAILURE: отметку ставим в прошлое.
+        now -= max(0.0, interval - RETRY_AFTER_FAILURE)
+    config.set("last_update_check", int(now))
 
 
 def should_notify_app(version: str) -> bool:

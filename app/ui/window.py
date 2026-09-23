@@ -16,7 +16,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QAction, QCursor, QGuiApplication, QIcon
+from PySide6.QtGui import QAction, QColor, QCursor, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -58,6 +58,9 @@ PAGE_TRANSITION_MS = 220
 # нужен только значок и автопауза обхода при чужом VPN.
 POLL_VISIBLE_MS = 2500
 POLL_HIDDEN_MS = 10000
+
+# Подписка VPN сама обновляется не реже, чем раз в столько часов.
+SUBSCRIPTION_REFRESH_HOURS = 12
 
 # --- нативные константы --------------------------------------------------
 
@@ -323,6 +326,7 @@ class MainWindow(QWidget):
         self.setMinimumSize(*MIN_SIZE)
         self.resize(*self._ideal_size())
         self._sidebar_compact = False
+        self._current_key = ""
         self._intro_shown = False
         self._intro = None
 
@@ -345,6 +349,7 @@ class MainWindow(QWidget):
         self._notice_kind = ""
         self._update_timer = QTimer(self)
         self._update_timer.timeout.connect(self._check_updates_if_due)
+        self._update_timer.timeout.connect(self._refresh_subscription_if_due)
         self._update_timer.start(30 * 60 * 1000)
         QTimer.singleShot(150, lambda: self._poll_state(force=True))
         QTimer.singleShot(2500, self._startup_tasks)
@@ -425,9 +430,11 @@ class MainWindow(QWidget):
 
         sidebar_layout.addStretch(1)
 
+        # Кнопка отмечаемая: когда открыт раздел из «Ещё», она подсвечена, как
+        # обычный пункт меню. В общую группу не входит — щелчок по ней только
+        # открывает список и сам отметку не меняет.
         self.more_button = NavButton("__more__", "Ещё", "list",
                                      self.context, self.sidebar)
-        self.more_button.setCheckable(False)
         self.more_button.clicked.connect(self._show_more_menu)
         sidebar_layout.addWidget(self.more_button)
 
@@ -447,11 +454,17 @@ class MainWindow(QWidget):
         self.action_show.triggered.connect(self.show_normal)
         self.action_toggle = QAction("Запустить обход", self)
         self.action_toggle.triggered.connect(self._tray_toggle)
+        # VPN — тоже из трея: программа живёт там сутками, и открывать окно
+        # ради одного тумблера неудобно.
+        self.action_vpn = QAction("Включить VPN", self)
+        self.action_vpn.triggered.connect(self._tray_toggle_vpn)
         action_quit = QAction("Выход", self)
         action_quit.triggered.connect(self.quit_app)
 
         menu.addAction(self.action_show)
+        menu.addSeparator()
         menu.addAction(self.action_toggle)
+        menu.addAction(self.action_vpn)
         menu.addSeparator()
         menu.addAction(action_quit)
         self.tray.setContextMenu(menu)
@@ -462,7 +475,8 @@ class MainWindow(QWidget):
         # версию. По клику сразу ведём на обновление.
         self.tray.messageClicked.connect(self._notice_clicked)
 
-        self.context.status_changed.connect(self._update_tray)
+        self.context.status_changed.connect(lambda _status: self._update_tray())
+        self.context.vpn_status_changed.connect(lambda _status: self._update_tray())
 
     # --- тема ------------------------------------------------------------
 
@@ -505,6 +519,17 @@ class MainWindow(QWidget):
         self.setUpdatesEnabled(False)
         try:
             self.setStyleSheet(qss)
+            # Ссылки в тексте Qt красит цветом палитры, а не стилем: без этого
+            # они оставались системно-синими и в тёмной теме не читались.
+            # Палитру берут у приложения — у окна виджеты со стилем её не видят.
+            application = QApplication.instance()
+            link = QColor(self.context.color("accent_text", self.context.color("accent")))
+            if application is not None:
+                palette = application.palette()
+                if palette.color(QPalette.ColorRole.Link) != link:
+                    palette.setColor(QPalette.ColorRole.Link, link)
+                    palette.setColor(QPalette.ColorRole.LinkVisited, link)
+                    application.setPalette(palette)
         finally:
             self.setUpdatesEnabled(True)
         for button in self.nav_buttons.values():
@@ -596,6 +621,7 @@ class MainWindow(QWidget):
         widget = self.ensure_page(key)
         if widget is None:
             return
+        self._current_key = key
         animated = False
         if self.pages.currentWidget() is not widget:
             animated = transition(
@@ -630,6 +656,11 @@ class MainWindow(QWidget):
 
     def _show_more_menu(self) -> None:
         """Разделы, которыми пользуются редко, — по кнопке «Ещё»."""
+        # Щелчок уже переключил отметку — возвращаем ту, что соответствует
+        # открытому разделу.
+        more_keys = {item[0] for item in MORE_PAGES}
+        self.more_button.setChecked(self._current_key in more_keys)
+        self.more_button.apply_theme()
         menu = QMenu(self)
         for key, title, icon_name in MORE_PAGES:
             action = QAction(
@@ -867,13 +898,30 @@ class MainWindow(QWidget):
         if callable(toggle):
             toggle()
 
-    def _update_tray(self, status) -> None:
-        if status.running:
-            self.action_toggle.setText("Остановить обход")
-            self.tray.setToolTip(f"{APP_NAME} — обход активен ({status.mode_label})")
-        else:
-            self.action_toggle.setText("Запустить обход")
-            self.tray.setToolTip(f"{APP_NAME} — обход выключен")
+    def _tray_toggle_vpn(self) -> None:
+        """VPN из трея — тем же путём, что тумблер на главной."""
+        home = self.ensure_page("home")
+        if not self.context.servers():
+            # Без подписки включать нечего — показываем, куда её вставить.
+            self.show_normal()
+            self.show_page("vpnconnect")
+            self._show_toast("Сначала добавьте подписку — вставьте ссылку и нажмите «Обновить».",
+                             "warn")
+            return
+        toggle = getattr(home, "_toggle_vpn", None)
+        if callable(toggle):
+            toggle(not self.context.vpn_status.running)
+
+    def _update_tray(self) -> None:
+        status = self.context.status
+        vpn = self.context.vpn_status
+        self.action_toggle.setText("Остановить обход" if status.running else "Запустить обход")
+        self.action_vpn.setText("Выключить VPN" if vpn.running else "Включить VPN")
+        parts = [f"обход: {status.mode_label}" if status.running else "обход выключен"]
+        if vpn.running:
+            parts.append(f"VPN: {vpn.server}" if vpn.server else "VPN включён")
+        # Подсказка значка в Windows ограничена 127 символами.
+        self.tray.setToolTip(f"{APP_NAME} — {', '.join(parts)}"[:127])
 
     def _poll_state(self, force: bool = False) -> None:
         """Опрос состояния — в фоне: службы, процессы и адаптеры Windows
@@ -999,10 +1047,56 @@ class MainWindow(QWidget):
         self.show_page("updates")
         self.context.install_update.emit("app")
 
+    def _refresh_subscription_if_due(self) -> None:
+        """Подписка обновляется сама раз в полсуток.
+
+        Провайдеры меняют серверы и ключи, а кнопку «Обновить» нажимают редко:
+        у людей подписка неделями лежала такой, какой её скачали. Работающий VPN
+        не трогаем — новый список вступит в силу при следующем включении.
+        """
+        import time
+
+        from app.core.vpn import subscription
+        from app.ui.widgets import Worker
+
+        url = subscription.subscription_url()
+        if not url.lower().startswith(("http://", "https://")):
+            return  # ключ, вставленный вручную, обновлять неоткуда
+        worker = getattr(self, "_sub_worker", None)
+        if worker is not None and worker.busy():
+            return
+        _servers, info = subscription.load_cached()
+        if time.time() - float(info.updated_at or 0) < SUBSCRIPTION_REFRESH_HOURS * 3600:
+            return
+        # Не вышло — пробуем не чаще раза в полчаса, а не на каждом тике.
+        now = time.monotonic()
+        if now - getattr(self, "_sub_attempt", -1e9) < 25 * 60:
+            return
+        self._sub_attempt = now
+
+        worker = Worker(self)
+        worker.finished.connect(self._subscription_refreshed)
+        worker.failed.connect(
+            lambda message: logs.warn(f"Подписка не обновилась сама: {message}")
+        )
+        worker.run(subscription.fetch, url)
+        self._sub_worker = worker
+
+    def _subscription_refreshed(self, payload) -> None:
+        servers, _info = payload
+        self.context.set_servers(servers)
+        page = self.ensure_page("vpnconnect")
+        reload = getattr(page, "_load_cached", None)
+        if callable(reload):
+            reload()
+
     def _startup_tasks(self) -> None:
         self._start_tgws_if_wanted()
         self._start_vpn_if_wanted()
         self._check_updates_if_due()
+        # Через минуту: к этому времени VPN уже поднят, и провайдер подписки,
+        # закрытый напрямую, откроется через него.
+        QTimer.singleShot(60 * 1000, self._refresh_subscription_if_due)
         if config.get("autorun_last_strategy", False) and not self.context.status.running:
             home = self.ensure_page("home")
             starter = getattr(home, "start_bypass", None)

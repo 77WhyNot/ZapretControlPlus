@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -105,6 +105,7 @@ class ServerRow(QWidget):
         self.server = server
         self.latency = latency
         self.active = active
+        self._hover = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QHBoxLayout(self)
@@ -162,14 +163,37 @@ class ServerRow(QWidget):
         self.delay.setStyleSheet(
             f"color: {colors[probe.quality(self.latency)]}; font-weight: 600;"
         )
+        # Подсветку строки рисуем сами. Раньше она задавалась стилем без
+        # селектора, и Qt раздавал фон с полоской каждой ячейке по отдельности.
+        self.update()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        hover = getattr(self, "_hover", False)
+        if not self.active and not hover:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        rect = QRectF(self.rect()).adjusted(0, 2, 0, -2)
+        painter.setBrush(QColor(self.context.color(
+            "lane_vpn_soft" if self.active else "hover"
+        )))
+        painter.drawRoundedRect(rect, 8, 8)
         if self.active:
-            lane = self.context.color("lane_vpn")
-            self.setStyleSheet(
-                f"background: {self.context.color('lane_vpn_soft')}; "
-                f"border-left: 3px solid {lane};"
-            )
-        else:
-            self.setStyleSheet("background: transparent; border-left: 3px solid transparent;")
+            painter.setBrush(QColor(self.context.color("lane_vpn")))
+            painter.drawRoundedRect(QRectF(rect.x() + 1, rect.y() + 7, 3, rect.height() - 14),
+                                    1.5, 1.5)
+        painter.end()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -621,17 +645,30 @@ class VpnPage(Page):
         config.set("vpn_selected_server", name)
         for row in self._rows:
             row.set_active(row.server.name == name)
-
-        if vpn_engine.status().running:
-            try:
-                vpn_engine.switch_server(name)
-                self.context.ok(f"Активный сервер: «{name}»")
-            except VpnError as exc:
-                self.context.error(str(exc))
-        else:
-            self.context.ok(f"Выбран сервер «{name}»")
         self.context.servers_changed.emit()
         self._sync_control()
+
+        if not self.context.vpn_status.running:
+            self.context.ok(f"Выбран сервер «{name}»")
+            return
+
+        # Переключение — запрос к движку, до четырёх секунд. В потоке окна
+        # оно замораживало всё окно, поэтому — в фоне.
+        def switch() -> str:
+            try:
+                vpn_engine.switch_server(name)
+            except VpnError as exc:
+                raise RuntimeError(str(exc)) from exc
+            return name
+
+        worker = Worker(self)
+        worker.finished.connect(lambda _: (
+            self.context.ok(f"Активный сервер: «{name}»"),
+            self.context.refresh_vpn_status(force=True),
+        ))
+        worker.failed.connect(self.context.error)
+        worker.run(switch)
+        self._switch_worker = worker
 
     def measure_all(self) -> None:
         if not self._servers:

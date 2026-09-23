@@ -15,12 +15,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-import requests
-
 from app.core import engine as engine_module
 from app.core import logs, paths
 from app.core.constants import USER_AGENT
 from app.core.strategies import Strategy
+from app.core.lazy import requests  # сеть подгружается при первом обращении
 
 TEST_TIMEOUT = 6
 # Автоподбор: секунды здесь умножаются на два десятка стратегий, поэтому
