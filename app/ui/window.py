@@ -526,6 +526,11 @@ class MainWindow(QWidget):
         self._intro_shown = True
         first = bool(config.get("first_run", True))
         previous = self._updated_from()
+        if str(config.get("seen_version", "")) != APP_VERSION:
+            # Новая версия — новый значок: без этого панель задач держит старый.
+            from app.core import winapi
+
+            winapi.refresh_shell_icons()
         config.set("first_run", False, save=False)
         config.set("seen_version", APP_VERSION)
         if first:

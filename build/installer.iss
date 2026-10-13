@@ -49,6 +49,11 @@ WizardSmallImageFile=art\wizard-small.bmp
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName}
 
+; После установки Проводник перечитывает значки. Иначе на панели задач
+; (особенно у закреплённого ярлыка) остаётся прежний значок из кэша: путь
+; к exe между версиями не меняется.
+ChangesAssociations=yes
+
 CloseApplications=yes
 RestartApplications=no
 SetupMutex=ZapretControlPlusSetupMutex
@@ -265,9 +270,16 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
 begin
-  if (CurStep = ssPostInstall) and WizardSilent() then
-    ShellExec('open', ExpandConstant('{app}\{#AppExeName}'), '',
-              ExpandConstant('{app}'), SW_SHOW, ewNoWait, ResultCode);
+  if CurStep = ssPostInstall then
+  begin
+    { Кэш значков: ie4uinit -show заставляет Windows 10/11 перечитать его. }
+    if FileExists(ExpandConstant('{sys}\ie4uinit.exe')) then
+      Exec(ExpandConstant('{sys}\ie4uinit.exe'), '-show', '', SW_HIDE,
+           ewWaitUntilTerminated, ResultCode);
+    if WizardSilent() then
+      ShellExec('open', ExpandConstant('{app}\{#AppExeName}'), '',
+                ExpandConstant('{app}'), SW_SHOW, ewNoWait, ResultCode);
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
