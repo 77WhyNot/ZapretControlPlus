@@ -593,6 +593,11 @@ class WhatsNew(QWidget):
         self._phase = "paint"
         self._veil = 0.0
         self._closing = False
+        self._legacy: QPixmap | None = None
+        from app.core.constants import APP_VERSION
+
+        self._caption_from = f"было · Zapret Control+ {previous}".strip()
+        self._caption_to = f"стало · ZapretCtrl {APP_VERSION}"
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setGeometry(window.root.rect())
@@ -601,6 +606,8 @@ class WhatsNew(QWidget):
 
         self.letter = self._build_letter()
         self.letter.hide()
+        # Окно меняют в размерах — покрывало и письмо следуют за ним.
+        window.root.installEventFilter(self)
 
         self._timer = QTimer(self)
         self._timer.setInterval(16)
@@ -738,29 +745,65 @@ class WhatsNew(QWidget):
 
     # --- ход ------------------------------------------------------------
 
-    def start(self) -> None:
-        from app.core.constants import APP_VERSION
+    def cover(self) -> bool:
+        """Сразу закрыть окно прежним обликом — до первого кадра нового.
 
+        Иначе после обновления сначала мелькает новая главная, и только потом
+        её «закрашивают» поверх старой.
+        """
+        if self._old is not None:
+            return True
+        if motion_level() == "off":
+            return False
         dark = self.context.is_dark
         legacy = paths.resource_path("legacy", "home-dark.png" if dark else "home-light.png")
+        if not legacy.exists():
+            return False
+        image = QPixmap(str(legacy))
+        if image.isNull():
+            return False
+        self._legacy = image
+        self._old = self._fit(image)
+        self._phase = "hold"
+        self.setGeometry(self.window_.root.rect())
+        self.show()
+        self.raise_()
+        return True
+
+    def _fit(self, image: QPixmap) -> QPixmap:
+        # Старый снимок — по размеру окна (он был снят в 1240×860).
+        return image.scaled(self.window_.root.size(), Qt.AspectRatioMode.IgnoreAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation)
+
+    def start(self) -> None:
+        self.cover()
         root = self.window_.root
         bg = QColor(self.context.color("bg"))
+        # Снимок нового облика — без самого покрывала поверх него.
+        self.hide()
         self._new = snapshot(root, bg)
-        if legacy.exists() and motion_level() != "off":
-            image = QPixmap(str(legacy))
-            # Старый снимок — по размеру окна (он был снят в 1240×860).
-            self._old = image.scaled(root.size(), Qt.AspectRatioMode.IgnoreAspectRatio,
-                                     Qt.TransformationMode.SmoothTransformation)
+        self.setGeometry(root.rect())
         self.show()
         self.raise_()
         self.setFocus()
-        self._caption_from = f"было · Zapret Control+ {self.previous}".strip()
-        self._caption_to = f"стало · ZapretCtrl {APP_VERSION}"
         if self._old is None:
             self._show_letter()
             return
+        self._phase = "paint"
         self._t0 = time.perf_counter()
         self._timer.start()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        from PySide6.QtCore import QEvent
+
+        if watched is self.window_.root and event.type() == QEvent.Type.Resize:
+            self.setGeometry(self.window_.root.rect())
+            if self._phase in ("hold", "paint") and getattr(self, "_legacy", None) is not None:
+                self._old = self._fit(self._legacy)
+            elif self._phase == "letter" and self.letter.isVisible():
+                self._rise.stop()
+                self._place_letter()
+        return False
 
     def _total(self) -> float:
         return self._spines[-1][2] + self.STROKE_SECONDS + 0.35
@@ -781,7 +824,19 @@ class WhatsNew(QWidget):
         self._veil_anim.setEndValue(1.0)
         self._veil_anim.start()
         letter = self.letter
-        # Высота — по переносам строк: adjustSize их не учитывает.
+        self._place_letter()
+        letter.move(letter.pos() + QPointF(0, 46).toPoint())
+        letter.show()
+        fade_in(letter, 520)
+        self._rise.stop()
+        self._rise.setStartValue(letter.pos())
+        self._rise.setEndValue(letter.pos() - QPointF(0, 46).toPoint())
+        self._rise.start()
+
+    def _place_letter(self) -> None:
+        """Письмо по центру; высота — по переносам строк (adjustSize их не видит)."""
+        letter = self.letter
+        letter.setFixedWidth(min(760, max(520, self.width() - 80)))
         layout = letter.layout()
         letter.ensurePolished()
         layout.activate()
@@ -789,13 +844,7 @@ class WhatsNew(QWidget):
         letter.resize(letter.width(), max(height, letter.sizeHint().height()))
         x = (self.width() - letter.width()) // 2
         y = max(20, (self.height() - letter.height()) // 2)
-        letter.move(x, y + 46)
-        letter.show()
-        fade_in(letter, 520)
-        self._rise.stop()
-        self._rise.setStartValue(letter.pos())
-        self._rise.setEndValue(letter.pos() - QPointF(0, 46).toPoint())
-        self._rise.start()
+        letter.move(x, y)
 
     def close_animated(self, action: str) -> None:
         if self._closing:
@@ -821,6 +870,10 @@ class WhatsNew(QWidget):
             self.on_done(getattr(self, "_action", "close"))
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._phase == "hold":
+            # Секунда до первого мазка: новое окно под покрывалом ещё раскладывается.
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Escape:
             if self._phase == "paint":
                 self._timer.stop()
@@ -840,41 +893,50 @@ class WhatsNew(QWidget):
     # --- рисование ------------------------------------------------------
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        from app.ui import fonts
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         c = self.context
-        if self._phase == "paint" and self._old is not None and self._new is not None:
+        if self._phase == "hold" and self._old is not None:
+            # Окно только открылось: пока что это прежний облик.
+            painter.drawPixmap(self.rect(), self._old)
+            self._draw_captions(painter, ((self._caption_from, 1.0),))
+        elif self._phase == "paint" and self._old is not None and self._new is not None:
             now = time.perf_counter() - self._t0
-            painter.drawPixmap(0, 0, self._old)
+            painter.drawPixmap(self.rect(), self._old)
             mask = self._mask(now)
             painter.save()
             painter.setClipPath(mask)
-            painter.drawPixmap(0, 0, self._new)
+            painter.drawPixmap(self.rect(), self._new)
             painter.restore()
             # Подпись внизу: «было» тает, «стало» проступает.
             share = expo_out(max(0.0, (now - 0.6) / 1.2))
-            painter.setFont(fonts.mono(11, 500, 0.12))
-            metrics = painter.fontMetrics()
-            for text, alpha in ((self._caption_from.upper(), 1 - share),
-                                (self._caption_to.upper(), share)):
-                if alpha <= 0.02:
-                    continue
-                width = metrics.horizontalAdvance(text) + 28
-                box = QRectF((self.width() - width) / 2, self.height() - 54, width, 28)
-                painter.setOpacity(alpha)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(c.color("ink")))
-                painter.drawRoundedRect(box, 14, 14)
-                painter.setPen(QColor(c.color("bg")))
-                painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), text)
-            painter.setOpacity(1.0)
+            self._draw_captions(painter, ((self._caption_from, 1 - share),
+                                          (self._caption_to, share)))
         if self._veil > 0.0:
             veil = QColor(c.color("ink") if not c.is_dark else "#000000")
             veil.setAlphaF((0.36 if not c.is_dark else 0.58) * self._veil)
             painter.fillRect(self.rect(), veil)
         painter.end()
+
+    def _draw_captions(self, painter: QPainter, captions) -> None:
+        from app.ui import fonts
+
+        c = self.context
+        painter.setFont(fonts.mono(11, 500, 0.12))
+        metrics = painter.fontMetrics()
+        for text, alpha in captions:
+            if alpha <= 0.02:
+                continue
+            text = text.upper()
+            width = metrics.horizontalAdvance(text) + 28
+            box = QRectF((self.width() - width) / 2, self.height() - 54, width, 28)
+            painter.setOpacity(alpha)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(c.color("ink")))
+            painter.drawRoundedRect(box, 14, 14)
+            painter.setPen(QColor(c.color("bg")))
+            painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), text)
+        painter.setOpacity(1.0)
 
 
 class _IconBadge(QWidget):

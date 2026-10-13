@@ -496,25 +496,42 @@ class MainWindow(QWidget):
         self._enable_native_resize()
         self._set_background(self.isMinimized())
         if not self._intro_shown:
+            # После обновления окно сразу открывается прежним обликом: новый
+            # не должен мелькнуть до того, как его «нарисуют» поверх старого.
+            if not self.isMinimized() and self._updated_from() is not None \
+                    and self._intro is None:
+                self._intro = self._make_whats_new(self._updated_from() or "")
+                if not self._intro.cover():
+                    self._intro.deleteLater()
+                    self._intro = None
             # Первый показ окна: приветствие или рассказ об обновлении. Ждём,
             # пока окно проявится, иначе карточка выедет из пустого экрана.
             QTimer.singleShot(650, self._show_intro)
 
-    def _show_intro(self) -> None:
-        """Знакомство при первом запуске и «что нового» после обновления."""
+    def _updated_from(self) -> str | None:
+        """С какой версии обновились — или None, если рассказывать не о чем."""
         from app.core import whatsnew
 
+        if bool(config.get("first_run", True)):
+            return None
+        seen = str(config.get("seen_version", ""))
+        if seen == APP_VERSION or not whatsnew.changes_for():
+            return None
+        return seen
+
+    def _show_intro(self) -> None:
+        """Знакомство при первом запуске и «что нового» после обновления."""
         if self._intro_shown or not self.isVisible() or self.isMinimized():
             return
         self._intro_shown = True
         first = bool(config.get("first_run", True))
-        seen = str(config.get("seen_version", ""))
+        previous = self._updated_from()
         config.set("first_run", False, save=False)
         config.set("seen_version", APP_VERSION)
         if first:
             self.start_tour()
-        elif seen != APP_VERSION and whatsnew.changes_for():
-            self.show_whats_new(previous=seen)
+        elif previous is not None:
+            self.show_whats_new(previous=previous)
 
     def start_tour(self) -> None:
         """Прогулка по разделам — с первого запуска или из Настроек."""
@@ -530,24 +547,41 @@ class MainWindow(QWidget):
         self._intro = Tour(self, self.context)
         self._intro.start()
 
-    def show_whats_new(self, previous: str = "") -> None:
-        """Прежний облик закрашивается новым, потом — письмо об изменениях."""
+    def _make_whats_new(self, previous: str):
         from app.core import whatsnew
         from app.ui.tour import WhatsNew
-
-        if not previous:
-            previous = "3.8.0"
 
         def done(action: str) -> None:
             self._intro = None
             if action == "tour":
                 QTimer.singleShot(120, self.start_tour)
 
+        return WhatsNew(self, self.context, whatsnew.changes_for(), previous or "3.8.0", done)
+
+    def show_whats_new(self, previous: str = "") -> None:
+        """Прежний облик закрашивается новым, потом — письмо об изменениях."""
+        from app.ui.tour import WhatsNew
+
+        intro = self._intro if isinstance(self._intro, WhatsNew) else None
+        if intro is None:
+            # Повтор из Настроек: прежняя прогулка или письмо уходят.
+            if self._intro is not None:
+                try:
+                    self._intro.hide()
+                    self._intro.deleteLater()
+                except RuntimeError:
+                    pass
+            intro = self._make_whats_new(previous)
+            self._intro = intro
+            intro.cover()
+
         self.show_page("home")
         # Снимок нового облика — когда главная уже на месте.
         def run() -> None:
-            self._intro = WhatsNew(self, self.context, whatsnew.changes_for(), previous, done)
-            self._intro.start()
+            try:
+                intro.start()
+            except RuntimeError:
+                pass
 
         QTimer.singleShot(PAGE_TRANSITION_MS + 60, run)
 
