@@ -46,6 +46,8 @@ a = Analysis(
         # Шрифты оформления (SIL OFL) и снимки прежнего облика для «Что нового».
         (str(ROOT / "app" / "resources" / "fonts"), "resources/fonts"),
         (str(ROOT / "app" / "resources" / "legacy"), "resources/legacy"),
+        # «Российские сайты — напрямую»: доменные наборы roscomvpn (MIT).
+        (str(ROOT / "app" / "resources" / "routing"), "resources/routing"),
     ],
     hiddenimports=["app", "app.ui.window"],
     hookspath=[],

@@ -73,6 +73,9 @@ DEFAULTS: dict[str, Any] = {
     "vpn_last_update": 0,
     "vpn_proxy_port": 10808,
     "vpn_proxy_backup": {},         # системный прокси до нас (режим «Прокси»)
+    "vpn_ru_direct": True,          # российские сайты и сети — мимо VPN
+    "vpn_ru_lists_checked": 0,      # когда последний раз пытались обновить списки
+    "vpn_ru_lists_updated": 0,      # когда списки последний раз скачались
     # Игровой фильтр: свои диапазоны портов (пусто — 1024-65535, как в ядре).
     "game_filter_tcp_range": "",
     "game_filter_udp_range": "",

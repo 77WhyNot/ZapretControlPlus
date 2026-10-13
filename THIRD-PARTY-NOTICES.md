@@ -20,6 +20,8 @@ ZapretCtrl (до версии 4.0 — Zapret Control+) распространя�
 | [Python](https://www.python.org/) | Среда выполнения | PSF License |
 | [Comss DNS](https://www.comss.ru/page.php?id=7315) | Адреса Smart DNS для обхода гео-ограничений | Публичный сервис, программа лишь подставляет его адреса |
 | [Literata](https://github.com/googlefonts/literata), [Geist и Geist Mono](https://github.com/vercel/geist-font) | Шрифты оформления (`app/resources/fonts`, подмножество кириллицы и латиницы) | **SIL Open Font License 1.1** — тексты лицензий лежат рядом со шрифтами |
+| [roscomvpn-geosite](https://github.com/hydraponique/roscomvpn-geosite) | Доменные списки «Российские сайты — напрямую» в формате sing-box; копия вшита (`app/resources/routing`) и обновляется раз в сутки | **MIT** — текст лицензии лежит рядом со списками |
+| [roscomvpn-geoip](https://github.com/hydraponique/roscomvpn-geoip) | Российские IP-сети для того же переключателя | В программу не вшиты: скачиваются с GitHub при первом запуске VPN, как в Happ |
 | [core.telegram.org/resources/cidr.txt](https://core.telegram.org/resources/cidr.txt) | Официальный список подсетей Telegram для обхода MTProto | Публичные данные Telegram |
 
 ## Про sing-box и GPL-3.0

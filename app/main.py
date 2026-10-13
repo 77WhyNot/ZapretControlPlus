@@ -133,6 +133,22 @@ def _selftest() -> int:
     if problem:
         raise SystemExit(problem)
 
+    # «Российские сайты — напрямую»: вшитые списки на месте, и движок
+    # принимает туннель с этими правилами.
+    from app.core.vpn import routing
+
+    ru_sets = routing.prepare()
+    if len(ru_sets) < len(routing.ALL_SETS):
+        raise SystemExit(f"списки «российские сайты напрямую» неполные: {sorted(ru_sets)}")
+    vpn_engine.config_path.write_text(json.dumps(vpn_config.build_config(
+        [probe], mode=vpn_config.MODE_ALL, clash_secret="t", probe_port=18081,
+        dns_through_tunnel=True, ru_direct=ru_sets,
+    )), encoding="utf-8")
+    problem = vpn_engine.validate_config()
+    print(f"российские сайты напрямую: {'ок' if not problem else problem}")
+    if problem:
+        raise SystemExit(problem)
+
     window = MainWindow()
     for key, title, _ in PAGES:
         window.show_page(key)

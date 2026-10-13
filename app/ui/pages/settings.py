@@ -173,13 +173,14 @@ class SettingsPage(Page):
         super().__init__(
             context,
             "Всё *по-своему*",
-            "Тема, движение рисунков, поведение при запуске и сеть.",
+            "Тема, движение рисунков, поведение, маршруты VPN и сеть.",
             parent,
             eyebrow="Настройки",
         )
         self._switches: list[Switch] = []
         self._build_appearance()
         self._build_behaviour()
+        self._build_routing()
         context.theme_changed.connect(self._theme_changed_outside)
         self._build_network()
         self._build_danger()
@@ -396,6 +397,98 @@ class SettingsPage(Page):
         else:
             winapi.autostart_disable(AUTOSTART_TASK)
             self.context.ok("Автозапуск выключен")
+
+    # --- маршруты VPN ----------------------------------------------------
+
+    def _build_routing(self) -> None:
+        card = Card(padding=20, spacing=14)
+        card.add(section_label("VPN и российские сайты"))
+
+        self.switch_ru = self._add_switch(
+            card, "vpn_ru_direct", "Российские сайты — напрямую",
+            "Сайты в зонах .ru, .su и .рф, банки, Госуслуги, маркетплейсы, "
+            "Яндекс и VK, а ещё российские сети идут мимо VPN и открываются "
+            "как обычно — без отказов «доступно только в России». YouTube, "
+            "Telegram и сервисы, которые сами закрылись для России, остаются в VPN.",
+            on_change=self._toggle_ru_direct,
+        )
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.ru_status = faint_label("")
+        row.addWidget(self.ru_status, 1)
+        self.ru_spinner = Spinner(14, self.context.color("accent"))
+        row.addWidget(self.ru_spinner)
+        self.btn_ru_refresh = Button("Обновить списки", variant="soft")
+        self.btn_ru_refresh.clicked.connect(lambda: self._refresh_ru_lists(quiet=False))
+        row.addWidget(self.btn_ru_refresh)
+        card.add_layout(row)
+        self.body.addWidget(card)
+        self._sync_ru_status()
+
+    def _sync_ru_status(self) -> None:
+        from app.core.vpn import routing
+        from app.ui.naming import long_date
+
+        stamp = routing.lists_date()
+        if stamp:
+            text = (f"Списки roscomvpn от {long_date(stamp).lower()}. "
+                    "Обновляются сами раз в сутки.")
+        else:
+            text = ("Списки roscomvpn: домены уже в программе, российские сети "
+                    "скачаются при первом запуске VPN.")
+        self.ru_status.setText(text)
+        enabled = bool(config.get("vpn_ru_direct", True))
+        self.ru_status.setEnabled(enabled)
+        self.btn_ru_refresh.setEnabled(enabled)
+
+    def _toggle_ru_direct(self, enabled: bool) -> None:
+        from app.ui import vpn_actions
+
+        self._sync_ru_status()
+        if enabled:
+            from app.core.vpn import routing
+
+            if not routing.has_networks():
+                self._refresh_ru_lists(quiet=True)
+        label = "включены" if enabled else "выключены"
+        if vpn_actions.restart_if_running(
+                self, self.context, f"Российские сайты напрямую {label}") is None:
+            self.context.ok(
+                "Российские сайты пойдут мимо VPN" if enabled
+                else "Весь трафик VPN снова идёт через туннель"
+            )
+
+    def _refresh_ru_lists(self, quiet: bool) -> None:
+        from app.core.vpn import routing
+
+        worker = getattr(self, "_ru_worker", None)
+        if worker is not None and worker.busy():
+            return
+        self.btn_ru_refresh.setEnabled(False)
+        self.ru_spinner.start()
+        worker = Worker(self)
+
+        def done(updated) -> None:
+            self.ru_spinner.stop()
+            self._sync_ru_status()
+            if quiet:
+                return
+            if updated:
+                self.context.ok("Списки обновлены — движок подхватит их сам")
+            else:
+                self.context.warn("Не удалось скачать списки: нет доступа к GitHub")
+
+        def failed(message: str) -> None:
+            self.ru_spinner.stop()
+            self._sync_ru_status()
+            if not quiet:
+                self.context.error(f"Не удалось обновить списки: {message}")
+
+        worker.finished.connect(done)
+        worker.failed.connect(failed)
+        worker.run(routing.refresh, True)
+        self._ru_worker = worker
 
     # --- сеть ------------------------------------------------------------
 
