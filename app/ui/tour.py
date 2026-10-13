@@ -680,6 +680,8 @@ class WhatsNew(QWidget):
             body.setObjectName("Faint")
             body.setWordWrap(True)
             words.addWidget(body)
+            # Соседняя ячейка в ряду может быть выше: текст держим у верха.
+            words.addStretch(1)
             cell.addLayout(words, 1)
             grid.addLayout(cell, index // 2, index % 2)
         grid.setColumnStretch(0, 1)

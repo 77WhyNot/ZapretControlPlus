@@ -326,7 +326,9 @@ class HomePage(Page):
 
     def _fit_stamps(self) -> None:
         """Четыре марки в ряд, а в узком окне — две на две."""
-        columns = 4 if self.width() >= 900 else 2
+        columns = 4 if self.width() >= 940 else 2
+        # Поуже окно — поуже и просветы: марке нужнее место под надпись.
+        self._stamps_grid.setHorizontalSpacing(26 if self.width() >= 1120 else 14)
         if columns == self._stamp_columns:
             return
         self._stamp_columns = columns

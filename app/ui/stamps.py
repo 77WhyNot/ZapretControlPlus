@@ -16,7 +16,7 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from app.ui import fonts
@@ -248,19 +248,27 @@ class StampCard(QWidget):
         self.renderer.paint(painter, art, self.devicePixelRatioF())
         painter.restore()
 
-        # Номинал и подпись.
+        # Номинал и подпись. Подпись справа короткая — номиналу отдаём остальное:
+        # длинное название сначала чуть мельчает и только потом обрезается.
         meta_y = art.bottom() + 6
+        small_font = fonts.mono(9.5, 500, 0.1)
+        small = QFontMetricsF(small_font)
+        cap = small.elidedText(self.caption, Qt.TextElideMode.ElideRight, art.width() * 0.45)
+        cap_width = small.horizontalAdvance(cap)
+        room = art.width() - cap_width - 10
+        baseline = meta_y + QFontMetricsF(fonts.serif(21, 400, italic=True)).ascent()
+        size = 21.0
+        den_font = fonts.serif(size, 400, italic=True)
+        while size > 14.0 and QFontMetricsF(den_font).horizontalAdvance(self.den) > room:
+            size -= 1.0
+            den_font = fonts.serif(size, 400, italic=True)
+        den = QFontMetricsF(den_font).elidedText(self.den, Qt.TextElideMode.ElideRight, room)
         painter.setPen(QColor("#141413"))
-        painter.setFont(fonts.serif(21, 400, italic=True))
-        metrics = painter.fontMetrics()
-        den = metrics.elidedText(self.den, Qt.TextElideMode.ElideRight, int(art.width() * 0.55))
-        painter.drawText(QPointF(art.left() + 2, meta_y + metrics.ascent()), den)
-        painter.setFont(fonts.mono(9.5, 500, 0.1))
+        painter.setFont(den_font)
+        painter.drawText(QPointF(art.left() + 2, baseline), den)
+        painter.setFont(small_font)
         painter.setPen(QColor("#3D3D3A"))
-        small = painter.fontMetrics()
-        cap = small.elidedText(self.caption, Qt.TextElideMode.ElideRight, int(art.width() * 0.45))
-        painter.drawText(QPointF(art.right() - 2 - small.horizontalAdvance(cap),
-                                 meta_y + metrics.ascent() - 1), cap)
+        painter.drawText(QPointF(art.right() - 2 - cap_width, baseline - 1), cap)
 
         # Штемпель «РАБОТАЕТ»: падает сверху чуть повёрнутым и ложится.
         if self._mark > 0.0:
