@@ -1,0 +1,39 @@
+name: Сборка беты
+
+# Бета собирается из веток claude/** и лежит артефактом у прогона —
+# ни тега, ни релиза, ни обновления для установленных копий.
+on:
+  push:
+    branches:
+      - "claude/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Установить зависимости
+        run: pip install -r requirements.txt
+
+      - name: Установить Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Собрать
+        run: powershell -ExecutionPolicy Bypass -File build\build.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZapretCtrl-beta-Setup
+          path: dist/ZapretControlPlus-Setup-*.exe
+          retention-days: 30
