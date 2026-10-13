@@ -6,7 +6,7 @@ APP_NAME = "ZapretCtrl"
 # обновления — менять их значит потерять всё это у тех, кто обновился.
 APP_ID = "ZapretControlPlus"
 APP_VERSION = "4.0.0"
-APP_EDITION = "beta"     # пометка рядом с версией; пусто — обычный выпуск
+APP_EDITION = ""         # пометка рядом с версией (например, "beta"); пусто — обычный выпуск
 APP_AUTHOR = "ketamine"
 APP_AUTHOR_FULL = "Ivan Milyaev (ketamine)"
 APP_PUBLISHER = "Ivan Milyaev (ketamine)"
