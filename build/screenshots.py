@@ -28,22 +28,18 @@ def main() -> int:
     from app.ui.window import PAGES, MainWindow
 
     window = MainWindow()
-    window.resize(1240, 820)
+    window.resize(1240, 860)
     window.show()
     application.processEvents()
 
-    combos = [
-        ("rails", "sapphire"),
-        ("light", "sapphire"),
-        ("midnight", "cyan"),
-    ]
+    # С 4.0 тем две — «Бумага» и «Ночь», акцентов больше нет.
+    themes = ["light", "dark"]
     pages = [key for key, _title, _icon in PAGES]
 
     if DOCS:
         # Кадры для README: без плашек о правах и чужом VPN — они про
         # конкретную машину, а не про программу. Диагностику и проверку
         # обновлений запускаем, чтобы страницы не были пустыми.
-        combos = [("light", "sapphire"), ("rails", "sapphire")]
         home = window.ensure_page("home")
         for name in ("banner_admin", "banner_tunnel"):
             banner = getattr(home, name, None)
@@ -59,18 +55,17 @@ def main() -> int:
         while time.monotonic() < deadline:
             application.processEvents()
 
-    for theme_key, accent_key in combos:
+    for theme_key in themes:
         config.set("theme", theme_key, save=False)
-        config.set("accent", accent_key, save=False)
         window.apply_theme()
         application.processEvents()
         for page in pages:
             window.show_page(page)
-            # Страница проявляется 140 мс — снимок раньше выйдет пустым.
-            deadline = time.monotonic() + 0.3
+            # Страница въезжает и прорисовывает сцену — даём ей время.
+            deadline = time.monotonic() + 2.4
             while time.monotonic() < deadline:
                 application.processEvents()
-            path = OUTPUT / f"{theme_key}-{accent_key}-{page}.png"
+            path = OUTPUT / f"{theme_key}-{page}.png"
             window.grab().save(str(path))
             print(f"  {path}")
 

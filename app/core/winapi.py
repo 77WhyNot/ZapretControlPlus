@@ -171,6 +171,20 @@ def is_admin() -> bool:
         return False
 
 
+def refresh_shell_icons() -> None:
+    """Попросить Проводник перечитать значки.
+
+    Путь к exe между версиями не меняется, и Windows продолжает показывать
+    прежний значок из кэша — особенно у ярлыка, закреплённого на панели задач.
+    """
+    shcne_assocchanged = 0x08000000
+    shcnf_flush = 0x1000
+    try:
+        shell32.SHChangeNotify(shcne_assocchanged, shcnf_flush, None, None)
+    except (AttributeError, OSError):
+        pass
+
+
 def relaunch_as_admin(extra_args: Iterable[str] = ()) -> bool:
     """Перезапустить себя с повышением прав. True — запрос отправлен."""
     args = list(sys.argv[1:]) + list(extra_args)

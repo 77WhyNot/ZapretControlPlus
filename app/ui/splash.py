@@ -1,22 +1,22 @@
-"""Заставка на время запуска.
+"""Заставка на время запуска: бумажная карточка, на которой прорастает росток.
 
 Раньше окно показывалось недостроенным: десять страниц собирались уже после
 того, как Windows нарисовала рамку, и это выглядело как рывки и мелькание.
 Теперь пользователь видит спокойную заставку, а окно появляется готовым.
+Пока программа собирается, росток знака тянется вверх — это и есть полоса
+загрузки; на последнем шаге загорается глиняная точка.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
-from app.core import paths
-from app.core.constants import APP_AUTHOR, APP_NAME, APP_VERSION
-from app.ui import icons
+from app.core.constants import APP_AUTHOR, APP_EDITION, APP_NAME, APP_VERSION
 
-WIDTH = 380
-HEIGHT = 200
+WIDTH = 400
+HEIGHT = 210
 
 
 class Splash(QWidget):
@@ -37,14 +37,13 @@ class Splash(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
-        icon_path = paths.resource_path("icon.png")
-        if icon_path.exists():
-            self._logo = QPixmap(str(icon_path)).scaled(
-                56, 56, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        else:
-            self._logo = icons.pixmap("shield_check", tokens.get("accent", "#22C6D8"), 56)
+        from app.ui import fonts
+        from app.ui.ink import parse_path
+
+        fonts.load()
+        self._stem = parse_path("M10 18 L10 9")
+        self._leaf_left = parse_path("M10 11 C 6 11, 4 8, 4 5 C 8 5, 10 7, 10 11")
+        self._leaf_right = parse_path("M10 9 C 10 6, 12 4, 16 4 C 16 7, 14 9, 10 9")
 
         self._center()
 
@@ -81,49 +80,79 @@ class Splash(QWidget):
         self._animation.stop()
         self.close()
 
+    @staticmethod
+    def _prefix(path: QPainterPath, portion: float) -> list[QPointF]:
+        portion = max(0.0, min(1.0, portion))
+        return [path.pointAtPercent(k / 24 * portion) for k in range(25)]
+
     def paintEvent(self, event) -> None:  # noqa: N802
+        from app.ui import fonts
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        t = self.tokens
+        paper = QColor(t.get("bg", "#FAF9F5"))
+        ring = QColor(t.get("border_strong", "#D9D6CC"))
+        ink = QColor(t.get("ink", "#141413"))
+        muted = QColor(t.get("muted", "#73726C"))
+        clay = QColor(t.get("clay", "#D97757"))
+        olive = QColor(t.get("olive", "#788C5D"))
 
-        surface = QColor(self.tokens.get("surface", "#121821"))
-        border = QColor(self.tokens.get("border_strong", "#2A3441"))
-        text_color = QColor(self.tokens.get("text", "#DCE3ED"))
-        faint = QColor(self.tokens.get("text_faint", "#5E6B7D"))
-        accent = QColor(self.tokens.get("accent", "#22C6D8"))
+        painter.setPen(ring)
+        painter.setBrush(paper)
+        painter.drawRoundedRect(QRectF(0.5, 0.5, WIDTH - 1, HEIGHT - 1), 18, 18)
 
-        painter.setPen(border)
-        painter.setBrush(surface)
-        painter.drawRoundedRect(QRectF(0.5, 0.5, WIDTH - 1, HEIGHT - 1), 12, 12)
+        # Росток растёт вместе с загрузкой: стебель, листья, точка.
+        p = self._progress
+        painter.save()
+        painter.translate(30, 34)
+        painter.scale(4.0, 4.0)
+        pen = QPen(ink)
+        pen.setWidthF(0.45)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        stem = self._prefix(self._stem, p / 0.35)
+        painter.setPen(pen)
+        for a, b in zip(stem, stem[1:]):
+            painter.drawLine(a, b)
+        for leaf, start in ((self._leaf_left, 0.3), (self._leaf_right, 0.55)):
+            share = (p - start) / 0.35
+            if share <= 0:
+                continue
+            painter.setOpacity(min(1.0, share * 1.5))
+            painter.fillPath(leaf, olive)
+            painter.setOpacity(1.0)
+            points = self._prefix(leaf, share)
+            painter.setPen(pen)
+            for a, b in zip(points, points[1:]):
+                painter.drawLine(a, b)
+        if p >= 0.98:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(clay)
+            painter.drawEllipse(QPointF(16, 4), 2.2, 2.2)
+        painter.restore()
 
-        painter.drawPixmap(30, 34, self._logo)
-
-        title_font = QFont("Bahnschrift", 17)
-        title_font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(title_font)
-        painter.setPen(text_color)
-        painter.drawText(QRectF(102, 38, WIDTH - 130, 28),
+        painter.setFont(fonts.serif(30, 300))
+        painter.setPen(ink)
+        painter.drawText(QRectF(132, 40, WIDTH - 150, 40),
                          Qt.AlignmentFlag.AlignVCenter, APP_NAME)
+        painter.setFont(fonts.mono(10.5, 500, 0.1))
+        painter.setPen(QColor(t.get("accent_ink", "#A84B2A")))
+        painter.drawText(QRectF(134, 82, WIDTH - 150, 18), Qt.AlignmentFlag.AlignVCenter,
+                         f"{APP_VERSION} {APP_EDITION}".strip().upper() + f" · {APP_AUTHOR.upper()}")
 
-        version_font = QFont("Segoe UI", 9)
-        painter.setFont(version_font)
-        painter.setPen(faint)
-        painter.drawText(QRectF(102, 64, WIDTH - 130, 20),
-                         Qt.AlignmentFlag.AlignVCenter,
-                         f"версия {APP_VERSION}  ·  автор {APP_AUTHOR}")
-
-        painter.setFont(QFont("Segoe UI", 9))
-        painter.setPen(faint)
-        painter.drawText(QRectF(30, HEIGHT - 60, WIDTH - 60, 20),
+        painter.setFont(fonts.sans(12.5, 400))
+        painter.setPen(muted)
+        painter.drawText(QRectF(134, HEIGHT - 66, WIDTH - 160, 20),
                          Qt.AlignmentFlag.AlignVCenter, self._message)
 
-        track = QRectF(30, HEIGHT - 34, WIDTH - 60, 4)
+        # Тонкая линия земли под ростком — и ход загрузки поверх неё.
+        ground = QRectF(30, HEIGHT - 40, WIDTH - 60, 1.6)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(self.tokens.get("border", "#1E2733")))
-        painter.drawRoundedRect(track, 2, 2)
-
+        painter.setBrush(QColor(t.get("border", "#E3E2DE")))
+        painter.drawRoundedRect(ground, 0.8, 0.8)
         if self._progress > 0:
-            filled = QRectF(track.x(), track.y(),
-                            track.width() * self._progress, track.height())
-            painter.setBrush(accent)
-            painter.drawRoundedRect(filled, 2, 2)
+            painter.setBrush(ink)
+            painter.drawRoundedRect(QRectF(ground.x(), ground.y() - 0.4,
+                                           ground.width() * self._progress, 2.4), 1.2, 1.2)
         painter.end()

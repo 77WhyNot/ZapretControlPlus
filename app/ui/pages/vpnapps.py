@@ -136,10 +136,11 @@ class VpnAppsPage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "Программы VPN",
+            "Кто *плывёт*, а кто идёт пешком",
             "Кому идти через VPN, а кому напрямую. Всё, что не в туннеле, "
             "выходит обычным путём — там его подхватывает zapret.",
             parent,
+            eyebrow="VPN · программы",
         )
         self._cards: list[AppCard] = []
         self._entries: list[AppEntry] = []

@@ -17,7 +17,7 @@ from PySide6.QtCore import (
     Qt,
     Property,
 )
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QWidget
 
 from app.core import speedtest
@@ -51,8 +51,8 @@ class Gauge(QWidget):
         self.setMinimumHeight(248)
         self.setMaximumHeight(300)
         self._animation = QPropertyAnimation(self, b"value", self)
-        self._animation.setDuration(420)
-        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.setDuration(900)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutExpo)
 
     # --- свойство для анимации -------------------------------------------
 
@@ -84,59 +84,113 @@ class Gauge(QWidget):
         return min(math.log10(1 + self._value) / math.log10(1 + SCALE_MAX), 1.0)
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        """Стрелочный прибор, нарисованный тушью: деления, подписи шкалы,
+        стрелка с глиняным кончиком и крупная цифра Literata под ней."""
+        from PySide6.QtCore import QPointF
+
+        from app.ui import fonts
+
+        c = self.context
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        # Дуга должна целиком помещаться по высоте: снизу ещё подпись стадии.
-        diameter = max(min(self.width() - 80, self.height() - 56), 90)
-        rect = QRectF((self.width() - diameter) / 2, 12.0, diameter, diameter)
-        start = 215 * 16
-        span = 250 * 16
+        diameter = max(min(self.width() - 80, (self.height() - 70) * 1.25), 120)
+        radius = diameter / 2
+        center = QPointF(self.width() / 2, 18 + radius)
+        start_deg, span_deg = 215.0, 250.0
 
-        pen = QPen(QColor(self.context.color("border")))
-        pen.setWidthF(max(diameter / 16, 8))
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.drawArc(rect, start, -span)
+        def point(fraction: float, r: float) -> QPointF:
+            angle = math.radians(start_deg - span_deg * fraction)
+            return QPointF(center.x() + r * math.cos(angle), center.y() - r * math.sin(angle))
 
-        pen.setColor(QColor(self.context.color("accent")))
-        painter.setPen(pen)
-        painter.drawArc(rect, start, -int(span * self._fraction()))
+        rect = QRectF(center.x() - radius, center.y() - radius, diameter, diameter)
+        # Подложка шкалы — карандашом, пройденное — глиной.
+        track = QPen(QColor(c.color("pencil")))
+        track.setWidthF(max(diameter / 22, 6))
+        track.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(track)
+        painter.drawArc(rect, int(start_deg * 16), -int(span_deg * 16))
+        fraction = self._fraction()
+        if fraction > 0.002:
+            clay = QPen(QColor(c.color("clay")))
+            clay.setWidthF(max(diameter / 22, 6))
+            clay.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(clay)
+            painter.drawArc(rect, int(start_deg * 16), -int(span_deg * 16 * fraction))
 
-        painter.setPen(QColor(self.context.color("text")))
-        font = QFont("Bahnschrift", max(int(diameter / 5.2), 16))
-        font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(font)
-        painter.drawText(
-            QRectF(rect.left(), rect.center().y() - diameter / 4,
-                   rect.width(), diameter / 2.6),
-            Qt.AlignmentFlag.AlignCenter, speedtest.format_speed(self._value),
-        )
+        # Деления и подписи: шкала логарифмическая.
+        ink = QColor(c.color("ink"))
+        tick = QPen(ink)
+        tick.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setFont(fonts.mono(10, 500, 0.06))
+        metrics = painter.fontMetrics()
+        for value, label in ((0, "0"), (1, "1"), (10, "10"), (50, "50"), (100, "100"),
+                             (300, "300"), (1000, "1000")):
+            share = math.log10(1 + value) / math.log10(1 + SCALE_MAX)
+            tick.setWidthF(1.8)
+            painter.setPen(tick)
+            painter.drawLine(point(share, radius - diameter / 14), point(share, radius - diameter / 9))
+            spot = point(share, radius - diameter / 5.6)
+            painter.setPen(QColor(c.color("ink3")))
+            painter.drawText(QPointF(spot.x() - metrics.horizontalAdvance(label) / 2,
+                                     spot.y() + metrics.ascent() / 2 - 1), label)
+        tick.setWidthF(1.0)
+        painter.setPen(tick)
+        for k in range(41):
+            share = k / 40
+            painter.drawLine(point(share, radius - diameter / 14),
+                             point(share, radius - diameter / 12))
 
-        painter.setPen(QColor(self.context.color("text_dim")))
-        small = QFont()
-        small.setPointSize(9)
-        painter.setFont(small)
-        painter.drawText(
-            QRectF(rect.left(), rect.center().y() + diameter / 8, rect.width(), 22),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._caption,
-        )
-        painter.drawText(
-            QRectF(0, rect.bottom() - 4, self.width(), 26),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._stage,
-        )
+        # Стрелка.
+        needle = QPen(ink)
+        needle.setWidthF(2.4)
+        needle.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(needle)
+        tip = point(fraction, radius - diameter / 7.5)
+        tail = point(fraction, -diameter / 14)
+        painter.drawLine(tail, tip)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(c.color("clay")))
+        painter.drawEllipse(tip, 4.2, 4.2)
+        painter.setBrush(QColor(c.color("ink")))
+        painter.drawEllipse(center, 6.0, 6.0)
+        painter.setBrush(QColor(c.color("manilla")))
+        painter.drawEllipse(center, 2.6, 2.6)
+
+        # Цифра и подписи — под осью стрелки.
+        painter.setPen(QColor(c.color("ink")))
+        painter.setFont(fonts.serif(max(diameter / 6.2, 20), 300))
+        metrics = painter.fontMetrics()
+        text = speedtest.format_speed(self._value)
+        baseline = center.y() + radius * 0.52
+        painter.drawText(QPointF(center.x() - metrics.horizontalAdvance(text) / 2, baseline), text)
+        painter.setFont(fonts.mono(10.5, 500, 0.1))
+        metrics = painter.fontMetrics()
+        caption = self._caption.upper()
+        painter.setPen(QColor(c.color("ink3")))
+        painter.drawText(QPointF(center.x() - metrics.horizontalAdvance(caption) / 2,
+                                 baseline + 18), caption)
+        painter.setFont(fonts.sans(13, 400))
+        metrics = painter.fontMetrics()
+        painter.setPen(QColor(c.color("muted")))
+        painter.drawText(QPointF(center.x() - metrics.horizontalAdvance(self._stage) / 2,
+                                 self.height() - 8), self._stage)
         painter.end()
 
 
 class SpeedPage(Page):
     def __init__(self, context: AppContext,
                  parent: QWidget | None = None) -> None:
+        from app.ui import scenes
+
         super().__init__(
             context,
-            "Скорость интернета",
+            "Куда дует *ветер*",
             "Замер идёт тем же путём, которым сейчас ходит трафик: через обход, "
             "через VPN или напрямую. Ничего включать и выключать не нужно.",
             parent,
+            eyebrow="Ещё · скорость интернета",
+            scene=scenes.weathervane,
         )
         self._test: speedtest.SpeedTest | None = None
         self._worker: Worker | None = None

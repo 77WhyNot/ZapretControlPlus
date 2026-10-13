@@ -1,4 +1,4 @@
-"""Главное окно: безрамочное, с боковым меню и системным треем."""
+"""Главное окно: безрамочное, с закладками разделов сверху и системным треем."""
 
 from __future__ import annotations
 
@@ -6,24 +6,20 @@ import ctypes
 import threading
 from ctypes import wintypes
 
-from PySide6.QtCore import (
-    QByteArray,
-    QEasingCurve,
-    QPoint,
-    QRect,
-    QPropertyAnimation,
-    Qt,
-    QTimer,
-    Signal,
+from PySide6.QtCore import QByteArray, QPointF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QCursor,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+    QPalette,
+    QShortcut,
 )
-from PySide6.QtGui import QAction, QColor, QCursor, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
-    QButtonGroup,
-    QHBoxLayout,
-    QLabel,
     QMenu,
-    QPushButton,
     QStackedWidget,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -49,10 +45,11 @@ from app.ui.pages.servers import VpnPage
 from app.ui.pages.telegram import TelegramPage
 from app.ui.pages.vpnapps import VpnAppsPage
 from app.ui.pages.updates import UpdatesPage
-from app.ui.widgets import IconLabel, Toast, confirm, transition
+from app.ui.shell import TABS_HEIGHT, TITLE_HEIGHT, TabBar, ThemeWash, TitleBar
+from app.ui.widgets import Toast, confirm, snapshot, transition
 
 # Сколько длится переход между разделами; обновление данных страницы ждёт его.
-PAGE_TRANSITION_MS = 220
+PAGE_TRANSITION_MS = 380
 
 # Опрос состояния системы: часто, пока окно на экране, и редко в трее — там
 # нужен только значок и автопауза обхода при чужом VPN.
@@ -76,16 +73,12 @@ HTTOPLEFT, HTTOPRIGHT, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT = 13, 14, 15, 16, 1
 MONITOR_DEFAULTTONEAREST = 2
 RESIZE_BORDER = 8
 RESIZE_CORNER = 16
-TITLE_HEIGHT = 46
 
 # Размер окна. Окно тянется мышкой за любой край; меньше минимума не
 # сжимается, чтобы кнопки не налезали друг на друга.
 MIN_SIZE = (760, 520)
 IDEAL_SIZE = (1240, 860)       # главная влезает целиком, без прокрутки
 OLD_DEFAULT_SIZE = (1180, 760)  # размер прошлых версий: в нём главная не влезала
-SIDEBAR_WIDE = 212
-SIDEBAR_COMPACT = 64
-COMPACT_BELOW = 980             # окно уже — в меню остаются одни значки
 
 
 class POINT(ctypes.Structure):
@@ -106,8 +99,8 @@ class MONITORINFO(ctypes.Structure):
     ]
 
 
-# В боковом меню видны только те разделы, куда заходят регулярно.
-# Остальные никуда не делись — они за кнопкой «Ещё».
+# Закладки слева — разделы, куда заходят регулярно; справа, мелко, — редкие.
+# В узком окне редкие уходят в «Ещё».
 PRIMARY_PAGES = (
     ("home", "Главная", "home"),
     ("strategies", "Запрет", "shield_check"),
@@ -137,20 +130,20 @@ ALIASES = {
 
 def _vpn_section(context, parent):
     return TabbedPage(
-        context, "VPN",
-        "Ваша подписка: туннель для выбранных программ или прокси без "
-        "конфликтов с другим VPN.",
+        context, "Дальние *берега*",
+        "Из сада через калитку и дальше морем: туннель для выбранных программ "
+        "или прокси, который уживается с любым другим VPN.",
         [("connect", "Подключение", VpnPage), ("apps", "Программы", VpnAppsPage)],
-        parent,
+        parent, eyebrow="VPN · ваша подписка",
     )
 
 
 def _settings_section(context, parent):
     return TabbedPage(
-        context, "Настройки",
-        "Внешний вид, поведение, сеть и обновления.",
+        context, "Всё *по-своему*",
+        "Тема, движение рисунков, поведение при запуске, сеть и обновления.",
         [("main", "Основное", SettingsPage), ("updates", "Обновления", UpdatesPage)],
-        parent,
+        parent, eyebrow="Настройки",
     )
 
 
@@ -168,134 +161,6 @@ def collect_state() -> dict:
         "foreign": netadapters.foreign_vpn_names(str(singbox_path())),
         "dns": dnsctl.current_preset(),
     }
-
-
-class TitleBar(QWidget):
-    minimize_requested = Signal()
-    maximize_requested = Signal()
-    close_requested = Signal()
-    theme_toggle_requested = Signal()
-
-    def __init__(self, context: AppContext, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("TitleBar")
-        self.setFixedHeight(TITLE_HEIGHT)
-        self.context = context
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 8, 0)
-        layout.setSpacing(10)
-
-        self.logo = IconLabel("shield_check", context.color("accent"), 22, self)
-        layout.addWidget(self.logo)
-
-        title = QLabel(APP_NAME)
-        title.setObjectName("TitleText")
-        layout.addWidget(title)
-
-        version = QLabel(f"v{APP_VERSION}")
-        version.setObjectName("TitleVersion")
-        layout.addWidget(version)
-
-        self.state_label = QLabel("")
-        self.state_label.setObjectName("Faint")
-        layout.addSpacing(8)
-        layout.addWidget(self.state_label)
-
-        layout.addStretch(1)
-
-        # Светлая или тёмная — в один клик, не заходя в настройки.
-        self.btn_theme = self._window_button("moon", "WinButton")
-        self.btn_theme.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_theme.clicked.connect(self.theme_toggle_requested.emit)
-        layout.addWidget(self.btn_theme)
-        layout.addSpacing(6)
-
-        self.btn_min = self._window_button("minimize", "WinButton")
-        self.btn_max = self._window_button("maximize", "WinButton")
-        self.btn_close = self._window_button("close", "WinClose")
-        self.btn_min.clicked.connect(self.minimize_requested.emit)
-        self.btn_max.clicked.connect(self.maximize_requested.emit)
-        self.btn_close.clicked.connect(self.close_requested.emit)
-        for button in (self.btn_min, self.btn_max, self.btn_close):
-            layout.addWidget(button)
-
-        context.theme_changed.connect(self.apply_theme)
-        context.status_changed.connect(self._on_status)
-
-    def _window_button(self, icon_name: str, object_name: str) -> QPushButton:
-        button = QPushButton(self)
-        button.setObjectName(object_name)
-        button.setProperty("iconName", icon_name)
-        button.setCursor(Qt.CursorShape.ArrowCursor)
-        button.setIcon(icons.icon(icon_name, self.context.color("text_dim"), 16))
-        return button
-
-    def apply_theme(self) -> None:
-        self.logo.set_color(self.context.color("accent"))
-        for button in (self.btn_min, self.btn_max, self.btn_close):
-            name = str(button.property("iconName"))
-            button.setIcon(icons.icon(name, self.context.color("text_dim"), 16))
-        dark = self.context.is_dark
-        self.btn_theme.setProperty("iconName", "sun" if dark else "moon")
-        self.btn_theme.setIcon(icons.icon(
-            "sun" if dark else "moon", self.context.color("text_dim"), 16
-        ))
-        self.btn_theme.setToolTip(
-            "Переключить на светлую тему" if dark else "Переключить на тёмную тему"
-        )
-
-    def set_maximized(self, maximized: bool) -> None:
-        name = "restore" if maximized else "maximize"
-        self.btn_max.setProperty("iconName", name)
-        self.btn_max.setIcon(icons.icon(name, self.context.color("text_dim"), 16))
-
-    def _on_status(self, status) -> None:
-        if status.running:
-            self.state_label.setText(f"● обход активен — {status.mode_label}")
-        else:
-            self.state_label.setText("○ обход выключен")
-
-    def is_drag_zone(self, position: QPoint) -> bool:
-        child = self.childAt(position)
-        return not isinstance(child, QPushButton)
-
-
-class NavButton(QPushButton):
-    def __init__(self, key: str, title: str, icon_name: str,
-                 context: AppContext, parent: QWidget | None = None) -> None:
-        super().__init__(title, parent)
-        self.setObjectName("NavButton")
-        self.key = key
-        self.icon_name = icon_name
-        self.context = context
-        self.title = title
-        self.compact = False
-        self.setCheckable(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(38)
-        self.apply_theme()
-
-    def set_title(self, title: str) -> None:
-        self.title = title
-        self._show_title()
-
-    def set_compact(self, compact: bool) -> None:
-        """В узком окне меню — одни значки, подпись уходит в подсказку."""
-        self.compact = compact
-        self._show_title()
-
-    def _show_title(self) -> None:
-        self.setText("" if self.compact else self.title)
-        self.setToolTip(self.title if self.compact else "")
-
-    def apply_theme(self) -> None:
-        color = (
-            self.context.color("accent_text") if self.isChecked()
-            else self.context.color("text_dim")
-        )
-        self.setIcon(icons.icon(self.icon_name, color, 18))
-        self.setIconSize(icons.icon_size(18))
 
 
 class MainWindow(QWidget):
@@ -325,7 +190,6 @@ class MainWindow(QWidget):
         self.setWindowTitle(APP_NAME)
         self.setMinimumSize(*MIN_SIZE)
         self.resize(*self._ideal_size())
-        self._sidebar_compact = False
         self._current_key = ""
         self._intro_shown = False
         self._intro = None
@@ -378,34 +242,14 @@ class MainWindow(QWidget):
         self.title_bar.theme_toggle_requested.connect(self._toggle_theme)
         root_layout.addWidget(self.title_bar)
 
-        body = QWidget(self.root)
-        body_layout = QHBoxLayout(body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(0)
-        root_layout.addWidget(body, 1)
+        self.tab_bar = TabBar(self.context, PRIMARY_PAGES, MORE_PAGES, self.root)
+        self.tab_bar.selected.connect(self.show_page)
+        root_layout.addWidget(self.tab_bar)
 
-        self.sidebar = QWidget(body)
-        self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(SIDEBAR_WIDE)
-        sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(10, 14, 10, 14)
-        sidebar_layout.setSpacing(3)
-
-        self.nav_group = QButtonGroup(self)
-        self.nav_group.setExclusive(True)
-        self.nav_buttons: dict[str, NavButton] = {}
-
-        # Полоска, которая едет к выбранному пункту.
-        self.nav_marker = QWidget(self.sidebar)
-        self.nav_marker.setFixedWidth(3)
-        self.nav_marker.hide()
-        self._marker_animation = QPropertyAnimation(self.nav_marker, b"geometry", self)
-        self._marker_animation.setDuration(220)
-        self._marker_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        self.pages = QStackedWidget(body)
+        self.pages = QStackedWidget(self.root)
         self.pages.setObjectName("Content")
         self.page_widgets: dict[str, QWidget] = {}
+        root_layout.addWidget(self.pages, 1)
 
         # Страницы строятся при первом открытии: собирать все десять на старте
         # долго, и окно успевало показаться недостроенным.
@@ -421,26 +265,16 @@ class MainWindow(QWidget):
             "settings": _settings_section,
             "about": AboutPage,
         }
-        for key, title, icon_name in PRIMARY_PAGES:
-            button = NavButton(key, title, icon_name, self.context, self.sidebar)
-            button.clicked.connect(lambda _=False, k=key: self.show_page(k))
-            self.nav_group.addButton(button)
-            sidebar_layout.addWidget(button)
-            self.nav_buttons[key] = button
 
-        sidebar_layout.addStretch(1)
+        # Разделы с клавиатуры: Ctrl+1…7 и Ctrl+Tab по кругу.
+        for index, (key, _title, _icon) in enumerate(PRIMARY_PAGES, start=1):
+            shortcut = QShortcut(QKeySequence(f"Ctrl+{index}"), self)
+            shortcut.activated.connect(lambda k=key: self.show_page(k))
+        QShortcut(QKeySequence("Ctrl+Tab"), self).activated.connect(lambda: self._cycle_page(1))
+        QShortcut(QKeySequence("Ctrl+Shift+Tab"), self).activated.connect(
+            lambda: self._cycle_page(-1))
 
-        # Кнопка отмечаемая: когда открыт раздел из «Ещё», она подсвечена, как
-        # обычный пункт меню. В общую группу не входит — щелчок по ней только
-        # открывает список и сам отметку не меняет.
-        self.more_button = NavButton("__more__", "Ещё", "list",
-                                     self.context, self.sidebar)
-        self.more_button.clicked.connect(self._show_more_menu)
-        sidebar_layout.addWidget(self.more_button)
-
-        body_layout.addWidget(self.sidebar)
-        body_layout.addWidget(self.pages, 1)
-
+        self.theme_wash = ThemeWash(self.root)
         self.toast = Toast(self)
         self.show_page("home")
 
@@ -481,29 +315,27 @@ class MainWindow(QWidget):
     # --- тема ------------------------------------------------------------
 
     def _toggle_theme(self) -> None:
-        """Кнопка в заголовке: светлая ↔ последняя тёмная."""
-        from app.ui import theme as theme_module
+        """Луна или солнце в заголовке: бумага ↔ ночь."""
+        config.set("theme", "light" if self.context.is_dark else "dark")
+        button = self.title_bar.btn_theme
+        origin = QPointF(button.mapTo(self.root, button.rect().center()))
+        self.apply_theme_animated(origin)
 
-        current = str(config.get("theme"))
-        if self.context.is_dark:
-            if theme_module.THEME_BY_KEY.get(current) and theme_module.THEME_BY_KEY[current].dark:
-                config.set("last_dark_theme", current)
-            config.set("theme", "light")
-        else:
-            wanted = str(config.get("last_dark_theme", "rails"))
-            if wanted not in theme_module.THEME_BY_KEY:
-                wanted = "rails"
-            config.set("theme", wanted)
-        self.apply_theme_animated()
+    def apply_theme_animated(self, origin: QPointF | None = None) -> None:
+        """Смена темы: новая разливается кругом от кнопки, как краска по бумаге.
 
-    def apply_theme_animated(self) -> None:
-        """Смена темы без мигания: снимок старого вида тает поверх нового.
-
-        Перекраска всех виджетов занимает долю секунды, и без снимка было
+        Перекраска всех виджетов занимает долю секунды, и без снимков было
         видно, как окно перерисовывается кусками.
         """
-        transition(self.root, self.apply_theme, self.context.color("bg"),
-                   duration=280, slide=0)
+        if origin is None or not self.isVisible():
+            transition(self.root, self.apply_theme, self.context.color("bg"),
+                       duration=280, slide=0)
+            return
+        self.theme_wash.hide()
+        before = snapshot(self.root, QColor(self.context.color("bg")))
+        self.apply_theme()
+        after = snapshot(self.root, QColor(self.context.color("bg")))
+        self.theme_wash.play(before, after, origin)
 
     def apply_theme(self) -> None:
         from app.ui import icons as icon_cache
@@ -532,13 +364,7 @@ class MainWindow(QWidget):
                     application.setPalette(palette)
         finally:
             self.setUpdatesEnabled(True)
-        for button in self.nav_buttons.values():
-            button.apply_theme()
-        marker = getattr(self, 'nav_marker', None)
-        if marker is not None and marker.isVisible():
-            marker.setStyleSheet(
-                f"background: {self.context.color('accent')}; border-radius: 1px;"
-            )
+        self.title_bar.refresh_state()
         self._update_window_icon()
 
     def _update_window_icon(self) -> None:
@@ -621,30 +447,21 @@ class MainWindow(QWidget):
         widget = self.ensure_page(key)
         if widget is None:
             return
+        previous = self._current_key
         self._current_key = key
         animated = False
         if self.pages.currentWidget() is not widget:
+            # Новая страница слегка въезжает с той стороны, где её закладка.
+            order = [k for k, _t, _i in PAGES]
+            step = 0
+            if previous in order and key in order:
+                step = 1 if order.index(key) > order.index(previous) else -1
             animated = transition(
                 self.pages, lambda: self.pages.setCurrentWidget(widget),
                 self.context.color("bg"), duration=PAGE_TRANSITION_MS,
+                slide=0, shift=18.0 * step,
             )
-        # Группа исключающая: снять галочку со всех она не даёт, и при
-        # переходе в раздел из «Ещё» прошлый пункт оставался подсвеченным.
-        self.nav_group.setExclusive(False)
-        for nav_key, button in self.nav_buttons.items():
-            button.setChecked(nav_key == key)
-            button.apply_theme()
-        self.nav_group.setExclusive(True)
-
-        # Раздел из «Ещё» подсвечиваем самой кнопкой «Ещё».
-        more_keys = {item[0] for item in MORE_PAGES}
-        more = getattr(self, "more_button", None)
-        if more is not None:
-            title = dict((k, t) for k, t, _ in MORE_PAGES).get(key)
-            more.set_title(title or "Ещё")
-            more.setChecked(key in more_keys)
-            more.apply_theme()
-        self._move_marker(key)
+        self.tab_bar.set_current(key)
         activate = getattr(widget, "on_activate", None)
         if callable(activate):
             if animated:
@@ -654,47 +471,10 @@ class MainWindow(QWidget):
             else:
                 activate()
 
-    def _show_more_menu(self) -> None:
-        """Разделы, которыми пользуются редко, — по кнопке «Ещё»."""
-        # Щелчок уже переключил отметку — возвращаем ту, что соответствует
-        # открытому разделу.
-        more_keys = {item[0] for item in MORE_PAGES}
-        self.more_button.setChecked(self._current_key in more_keys)
-        self.more_button.apply_theme()
-        menu = QMenu(self)
-        for key, title, icon_name in MORE_PAGES:
-            action = QAction(
-                icons.icon(icon_name, self.context.color("text_dim"), 16), title, menu
-            )
-            action.triggered.connect(lambda _=False, k=key: self.show_page(k))
-            menu.addAction(action)
-        button = self.more_button
-        menu.exec(button.mapToGlobal(button.rect().topRight()))
-
-    def _move_marker(self, key: str) -> None:
-        """Подвинуть полоску к выбранному пункту меню."""
-        button = self.nav_buttons.get(key)
-        if button is None:
-            button = getattr(self, "more_button", None)
-            if button is None or not button.isChecked():
-                marker = getattr(self, "nav_marker", None)
-                if marker is not None:
-                    marker.hide()
-                return
-        target = QRect(2, button.y() + 8, 3, max(button.height() - 16, 8))
-        self.nav_marker.setStyleSheet(
-            f"background: {self.context.color('accent')}; border-radius: 1px;"
-        )
-        if not self.nav_marker.isVisible():
-            self.nav_marker.setGeometry(target)
-            self.nav_marker.show()
-            self.nav_marker.raise_()
-            return
-        self._marker_animation.stop()
-        self._marker_animation.setStartValue(self.nav_marker.geometry())
-        self._marker_animation.setEndValue(target)
-        self._marker_animation.start()
-        self.nav_marker.raise_()
+    def _cycle_page(self, step: int) -> None:
+        order = [k for k, _t, _i in PAGES]
+        current = self._current_key if self._current_key in order else order[0]
+        self.show_page(order[(order.index(current) + step) % len(order)])
 
     # --- окно ------------------------------------------------------------
 
@@ -716,32 +496,99 @@ class MainWindow(QWidget):
         self._enable_native_resize()
         self._set_background(self.isMinimized())
         if not self._intro_shown:
+            # После обновления окно сразу открывается прежним обликом: новый
+            # не должен мелькнуть до того, как его «нарисуют» поверх старого.
+            if not self.isMinimized() and self._updated_from() is not None \
+                    and self._intro is None:
+                self._intro = self._make_whats_new(self._updated_from() or "")
+                if not self._intro.cover():
+                    self._intro.deleteLater()
+                    self._intro = None
             # Первый показ окна: приветствие или рассказ об обновлении. Ждём,
             # пока окно проявится, иначе карточка выедет из пустого экрана.
             QTimer.singleShot(650, self._show_intro)
 
-    def _show_intro(self) -> None:
-        """Приветствие при первом запуске и «что нового» после обновления."""
+    def _updated_from(self) -> str | None:
+        """С какой версии обновились — или None, если рассказывать не о чем."""
         from app.core import whatsnew
 
+        if bool(config.get("first_run", True)):
+            return None
+        seen = str(config.get("seen_version", ""))
+        if seen == APP_VERSION or not whatsnew.changes_for():
+            return None
+        return seen
+
+    def _show_intro(self) -> None:
+        """Знакомство при первом запуске и «что нового» после обновления."""
         if self._intro_shown or not self.isVisible() or self.isMinimized():
             return
         self._intro_shown = True
         first = bool(config.get("first_run", True))
-        seen = str(config.get("seen_version", ""))
+        previous = self._updated_from()
+        if str(config.get("seen_version", "")) != APP_VERSION:
+            # Новая версия — новый значок: без этого панель задач держит старый.
+            from app.core import winapi
+
+            winapi.refresh_shell_icons()
         config.set("first_run", False, save=False)
         config.set("seen_version", APP_VERSION)
         if first:
-            kind = "welcome"
-        elif seen != APP_VERSION and whatsnew.changes_for():
-            kind = "changes"
-        else:
-            return
+            self.start_tour()
+        elif previous is not None:
+            self.show_whats_new(previous=previous)
 
-        from app.ui.welcome import Intro
+    def start_tour(self) -> None:
+        """Прогулка по разделам — с первого запуска или из Настроек."""
+        from app.ui.tour import Tour
 
-        self._intro = Intro(self, self.context, kind)
-        self._intro.show_animated()
+        current = getattr(self, "_intro", None)
+        if current is not None:
+            try:
+                current.hide()
+                current.deleteLater()
+            except RuntimeError:
+                pass
+        self._intro = Tour(self, self.context)
+        self._intro.start()
+
+    def _make_whats_new(self, previous: str):
+        from app.core import whatsnew
+        from app.ui.tour import WhatsNew
+
+        def done(action: str) -> None:
+            self._intro = None
+            if action == "tour":
+                QTimer.singleShot(120, self.start_tour)
+
+        return WhatsNew(self, self.context, whatsnew.changes_for(), previous or "3.8.0", done)
+
+    def show_whats_new(self, previous: str = "") -> None:
+        """Прежний облик закрашивается новым, потом — письмо об изменениях."""
+        from app.ui.tour import WhatsNew
+
+        intro = self._intro if isinstance(self._intro, WhatsNew) else None
+        if intro is None:
+            # Повтор из Настроек: прежняя прогулка или письмо уходят.
+            if self._intro is not None:
+                try:
+                    self._intro.hide()
+                    self._intro.deleteLater()
+                except RuntimeError:
+                    pass
+            intro = self._make_whats_new(previous)
+            self._intro = intro
+            intro.cover()
+
+        self.show_page("home")
+        # Снимок нового облика — когда главная уже на месте.
+        def run() -> None:
+            try:
+                intro.start()
+            except RuntimeError:
+                pass
+
+        QTimer.singleShot(PAGE_TRANSITION_MS + 60, run)
 
     def hideEvent(self, event) -> None:  # noqa: N802
         super().hideEvent(event)
@@ -766,19 +613,8 @@ class MainWindow(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self._fit_sidebar()
         if self.toast.isVisible():
             self.toast._reposition()
-
-    def _fit_sidebar(self) -> None:
-        """Узкое окно — меню из одних значков, чтобы страницам хватало места."""
-        compact = self.width() < COMPACT_BELOW
-        if compact == self._sidebar_compact:
-            return
-        self._sidebar_compact = compact
-        self.sidebar.setFixedWidth(SIDEBAR_COMPACT if compact else SIDEBAR_WIDE)
-        for button in (*self.nav_buttons.values(), self.more_button):
-            button.set_compact(compact)
 
     def nativeEvent(self, event_type: QByteArray, message) -> tuple[bool, int]:  # noqa: N802
         if event_type not in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
@@ -853,6 +689,11 @@ class MainWindow(QWidget):
         if y < TITLE_HEIGHT:
             local = self.title_bar.mapFrom(self, position)
             if self.title_bar.is_drag_zone(local):
+                return True, HTCAPTION
+        elif y < TITLE_HEIGHT + TABS_HEIGHT:
+            # Пустое место на полосе закладок — тоже «за что тянуть окно».
+            local = self.tab_bar.mapFrom(self, position)
+            if self.tab_bar.is_drag_zone(local):
                 return True, HTCAPTION
         return True, HTCLIENT
 
@@ -1126,7 +967,42 @@ class MainWindow(QWidget):
         if callable(reload):
             reload()
 
+    def _replace_retired_dns(self) -> None:
+        """Xbox DNS закрыт: если он всё ещё стоит в системе, сайты не открываются.
+
+        Программа его когда-то и поставила — значит, ей и чинить: ставим Comss
+        DNS и говорим, что произошло.
+        """
+        from app.core import dnsctl, winapi
+        from app.ui.widgets import Worker
+
+        current = self.context.dns_preset or ""
+        if not current.startswith("retired:"):
+            return
+        title = dnsctl.retired_title(current) or "Прежний DNS"
+        if not winapi.is_admin():
+            self._show_toast(
+                f"{title} закрыт по требованию Роскомнадзора, а он всё ещё стоит в "
+                "системе. Запустите программу от имени администратора — заменю на Comss DNS.",
+                "warn")
+            return
+
+        def done(_message) -> None:
+            config.set("xbox_dns_replaced", True)
+            self.context.refresh_dns()
+            self._show_toast(
+                f"{title} закрыт по требованию Роскомнадзора — поставил вместо него "
+                "Comss DNS. Сменить можно в разделе Smart DNS.", "ok")
+
+        worker = Worker(self)
+        worker.finished.connect(done)
+        worker.failed.connect(lambda message: self._show_toast(
+            f"Не удалось заменить закрытый {title}: {message}", "error"))
+        worker.run(dnsctl.replace_retired)
+        self._dns_fix_worker = worker
+
     def _startup_tasks(self) -> None:
+        self._replace_retired_dns()
         self._start_tgws_if_wanted()
         self._start_vpn_if_wanted()
         self._check_updates_if_due()

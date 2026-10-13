@@ -27,25 +27,109 @@ from app.ui.widgets import (
 )
 
 
-class ThemeCard(QWidget):
-    """Карточка-превью темы."""
+class ThemePreview(QWidget):
+    """Окошко-пейзаж темы: бумага — день, ночь — луна, «как в Windows» — и то и другое."""
+
+    def __init__(self, mode: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        from app.ui import scenes
+        from app.ui.ink import SceneRenderer, scene_palette
+
+        self.mode = mode
+        light = scene_palette(theme.build_tokens("light"))
+        dark = scene_palette(theme.build_tokens("dark"))
+        self.day = SceneRenderer(scenes.day_card(), light)
+        self.night = SceneRenderer(scenes.night_card(), dark)
+        self.night.dark = True
+        self.night._invalidate(rebuild_units=True)
+        self._plates = (QColor(light["plate"]), QColor(dark["plate"]))
+        self.setFixedHeight(92)
+        self.setMinimumWidth(150)
+
+    def frame_divider(self) -> int:
+        return 2
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        from app.ui.ink import motion_level
+        from app.ui.widgets import frame_clock
+
+        for renderer in (self.day, self.night):
+            renderer.motion = motion_level()
+        if motion_level() != "off":
+            frame_clock().subscribe(self)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        from app.ui.widgets import frame_clock
+
+        frame_clock().unsubscribe(self)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPainterPath, QPolygonF
+        from PySide6.QtCore import QPointF
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect())
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, 12, 12)
+        painter.setClipPath(clip)
+        dpr = self.devicePixelRatioF()
+        # Сцена вписывается по ширине и прижимается к низу окошка.
+        scene_h = rect.width() * 90 / 160
+        target = QRectF(0, rect.height() - scene_h, rect.width(), scene_h)
+        parts = {"light": [(self.day, 0)], "dark": [(self.night, 1)],
+                 "system": [(self.day, 0), (self.night, 1)]}[self.mode]
+        for renderer, index in parts:
+            painter.save()
+            if self.mode == "system":
+                w, h = rect.width(), rect.height()
+                if index == 0:
+                    polygon = [QPointF(0, 0), QPointF(w * 0.62, 0), QPointF(w * 0.38, h), QPointF(0, h)]
+                else:
+                    polygon = [QPointF(w * 0.62, 0), QPointF(w, 0), QPointF(w, h), QPointF(w * 0.38, h)]
+                half = QPainterPath()
+                half.addPolygon(QPolygonF(polygon))
+                painter.setClipPath(half, Qt.ClipOperation.IntersectClip)
+            painter.fillRect(rect, self._plates[index])
+            renderer.paint(painter, target, dpr)
+            painter.restore()
+        painter.end()
+
+
+class ThemeChoice(QWidget):
+    """Карточка выбора темы: пейзаж, название и пара слов."""
 
     picked = Signal(str)
 
-    def __init__(self, key: str, title: str, colors: dict[str, str],
+    def __init__(self, context: AppContext, key: str, title: str, text: str,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.key = key
-        self.title = title
-        self.colors = colors
-        self.selected = False
-        self.accent = "#2563EB"
-        self.setFixedSize(150, 104)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        from PySide6.QtWidgets import QLabel, QVBoxLayout
 
-    def set_selected(self, value: bool, accent: str) -> None:
+        self.context = context
+        self.key = key
+        self.selected = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumWidth(170)
+        self.setMaximumWidth(260)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 10)
+        layout.setSpacing(6)
+        self.preview = ThemePreview(key, self)
+        layout.addWidget(self.preview)
+        name = QLabel(title, self)
+        name.setStyleSheet("font-family: 'Literata'; font-size: 17px; background: transparent;")
+        layout.addWidget(name)
+        hint = QLabel(text, self)
+        hint.setObjectName("Faint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+    def set_selected(self, value: bool) -> None:
         self.selected = value
-        self.accent = accent
         self.update()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
@@ -54,78 +138,33 @@ class ThemeCard(QWidget):
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPen
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        border = QColor(self.accent if self.selected else self.colors["border"])
-        painter.setPen(border)
-        painter.setBrush(QColor(self.colors["bg"]))
-        painter.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 10, 10)
-
-        # Имитация окна: боковое меню, шапка и пара карточек.
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(self.colors["sidebar"]))
-        painter.drawRoundedRect(9, 9, 34, self.height() - 18, 6, 6)
-
-        painter.setBrush(QColor(self.colors["surface"]))
-        painter.drawRoundedRect(49, 9, self.width() - 58, 20, 5, 5)
-        painter.drawRoundedRect(49, 35, self.width() - 58, 26, 5, 5)
-
-        painter.setBrush(QColor(self.accent))
-        painter.drawRoundedRect(53, 41, 40, 13, 4, 4)
-        painter.setBrush(QColor(self.colors["border"]))
-        painter.drawRoundedRect(49, 67, self.width() - 58, 10, 4, 4)
-        painter.drawRoundedRect(14, 16, 24, 5, 2, 2)
-        painter.drawRoundedRect(14, 26, 24, 5, 2, 2)
-
-        painter.setPen(QColor(self.colors["text"]))
-        painter.drawText(
-            12, self.height() - 12, self.title
-        )
-        painter.end()
-
-
-class AccentDot(QWidget):
-    """Кружок выбора акцентного цвета."""
-
-    picked = Signal(str)
-
-    def __init__(self, accent: theme.AccentDef, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.accent = accent
-        self.selected = False
-        self.ring = "#CDD4DE"
-        self.setFixedSize(38, 38)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(accent.title)
-
-    def set_selected(self, value: bool, ring: str) -> None:
-        self.selected = value
-        self.ring = ring
-        self.update()
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.picked.emit(self.accent.key)
-        super().mouseReleaseEvent(event)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QColor(self.context.color("bg" if self.selected else "card")))
+        painter.drawRoundedRect(rect, 16, 16)
+        pen = QPen(QColor(self.context.color("ink" if self.selected else "border")))
+        pen.setWidthF(1.6 if self.selected else 1.0)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(rect, 16, 16)
         if self.selected:
-            pen = painter.pen()
-            pen.setColor(QColor(self.accent.base))
-            pen.setWidth(2)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(2, 2, self.width() - 4, self.height() - 4)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(self.accent.base))
-        inset = 7 if self.selected else 4
-        painter.drawEllipse(
-            inset, inset, self.width() - inset * 2, self.height() - inset * 2
-        )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(self.context.color("clay")))
+            # Точка выбора — на строке названия, справа.
+            painter.drawEllipse(QRectF(rect.right() - 22, 114, 8, 8))
         painter.end()
+
+
+MOTION_CHOICES = (
+    ("full", "Живое", "Линии дышат, листья качаются, всё прорисовывается"),
+    ("calm", "Спокойное", "Без дыхания линии, покачивание вполовину"),
+    ("off", "Неподвижное", "Рисунки стоят, переходы мгновенные"),
+)
 
 
 class SettingsPage(Page):
@@ -133,13 +172,15 @@ class SettingsPage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "Настройки",
-            "Внешний вид, поведение при запуске и параметры сети.",
+            "Всё *по-своему*",
+            "Тема, движение рисунков, поведение, маршруты VPN и сеть.",
             parent,
+            eyebrow="Настройки",
         )
         self._switches: list[Switch] = []
         self._build_appearance()
         self._build_behaviour()
+        self._build_routing()
         context.theme_changed.connect(self._theme_changed_outside)
         self._build_network()
         self._build_danger()
@@ -148,51 +189,97 @@ class SettingsPage(Page):
     # --- внешний вид -----------------------------------------------------
 
     def _build_appearance(self) -> None:
-        card = Card(padding=20, spacing=16)
-        card.add(section_label("Оформление"))
-        card.add(faint_label("Тема применяется сразу, перезапуск не нужен."))
+        from PySide6.QtWidgets import QPushButton
 
-        # Темы и цвета переносятся на новую строку, если окно узкое.
+        card = Card(padding=20, spacing=14)
+        card.add(section_label("Бумага или ночь"))
+        card.add(faint_label("Тема меняется сразу. Луна и солнце в заголовке окна "
+                             "переключают её в один щелчок."))
+
         themes_row = FlowLayout(spacing=12)
-        self.theme_cards: list[ThemeCard] = []
-        for item in theme.THEMES:
-            widget = ThemeCard(item.key, item.title, item.colors)
+        self.theme_cards: list[ThemeChoice] = []
+        for key, title, text in theme.THEME_CHOICES:
+            widget = ThemeChoice(self.context, key, title, text)
             widget.picked.connect(self._pick_theme)
             themes_row.addWidget(widget)
             self.theme_cards.append(widget)
         card.add_layout(themes_row)
 
-        system_row = QHBoxLayout()
-        system_row.setSpacing(10)
-        self.btn_system_theme = Button("Как в Windows", variant="ghost")
-        self.btn_system_theme.clicked.connect(lambda: self._pick_theme("system"))
-        system_row.addWidget(self.btn_system_theme)
-        system_row.addStretch(1)
-        card.add_layout(system_row)
+        card.add(Divider())
+        from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+
+        motion = QHBoxLayout()
+        motion.setSpacing(16)
+        texts = QVBoxLayout()
+        texts.setSpacing(2)
+        label = QLabel("Движение рисунков")
+        label.setStyleSheet("font-weight: 500;")
+        texts.addWidget(label)
+        self.motion_hint = faint_label("")
+        texts.addWidget(self.motion_hint)
+        motion.addLayout(texts, 1)
+        bar = QFrame()
+        bar.setObjectName("SegmentBar")
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(3, 3, 3, 3)
+        bar_layout.setSpacing(2)
+        self.motion_buttons: dict[str, QPushButton] = {}
+        for key, title, _text in MOTION_CHOICES:
+            button = QPushButton(title, bar)
+            button.setObjectName("SegmentButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _=False, k=key: self._pick_motion(k))
+            bar_layout.addWidget(button)
+            self.motion_buttons[key] = button
+        motion.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        card.add_layout(motion)
 
         card.add(Divider())
-        card.add(section_label("Акцентный цвет"))
-
-        accents_row = FlowLayout(spacing=10)
-        self.accent_dots: list[AccentDot] = []
-        for accent in theme.ACCENTS:
-            dot = AccentDot(accent)
-            dot.picked.connect(self._pick_accent)
-            accents_row.addWidget(dot)
-            self.accent_dots.append(dot)
-        card.add_layout(accents_row)
+        tour = QHBoxLayout()
+        tour.setSpacing(10)
+        tour_text = QVBoxLayout()
+        tour_text.setSpacing(2)
+        tour_label = QLabel("Знакомство с программой")
+        tour_label.setStyleSheet("font-weight: 500;")
+        tour_text.addWidget(tour_label)
+        tour_text.addWidget(faint_label("Короткая прогулка по разделам — что где лежит."))
+        tour.addLayout(tour_text, 1)
+        btn_tour = Button("Показать снова", variant="soft")
+        btn_tour.clicked.connect(self._start_tour)
+        tour.addWidget(btn_tour, 0, Qt.AlignmentFlag.AlignVCenter)
+        btn_news = Button("Что нового в 4.0", variant="ghost")
+        btn_news.clicked.connect(self._show_news)
+        tour.addWidget(btn_news, 0, Qt.AlignmentFlag.AlignVCenter)
+        card.add_layout(tour)
 
         self.body.addWidget(card)
 
     def _pick_theme(self, key: str) -> None:
+        if theme.normalize_theme_key(str(config.get("theme"))) == key:
+            return
         config.set("theme", key)
         self._apply_theme_globally()
         self._sync_appearance()
 
-    def _pick_accent(self, key: str) -> None:
-        config.set("accent", key)
-        self._apply_theme_globally()
+    def _pick_motion(self, key: str) -> None:
+        config.set("motion", key)
+        # Сцены перечитывают уровень движения вместе с темой.
+        window = self.window()
+        apply_theme = getattr(window, "apply_theme", None)
+        if callable(apply_theme):
+            apply_theme()
         self._sync_appearance()
+
+    def _start_tour(self) -> None:
+        starter = getattr(self.window(), "start_tour", None)
+        if callable(starter):
+            starter()
+
+    def _show_news(self) -> None:
+        shower = getattr(self.window(), "show_whats_new", None)
+        if callable(shower):
+            shower()
 
     def _apply_theme_globally(self) -> None:
         window = self.window()
@@ -202,19 +289,18 @@ class SettingsPage(Page):
             apply_theme()
 
     def _sync_appearance(self) -> None:
-        current_theme = str(config.get("theme"))
-        current_accent = str(config.get("accent"))
-        accent_color = self.context.color("accent")
+        current_theme = theme.normalize_theme_key(str(config.get("theme")))
         for widget in self.theme_cards:
-            widget.set_selected(widget.key == current_theme, accent_color)
-        for dot in self.accent_dots:
-            dot.set_selected(dot.accent.key == current_accent, accent_color)
-        self.btn_system_theme.setProperty(
-            "variant", "soft" if current_theme == "system" else "ghost"
-        )
-        style = self.btn_system_theme.style()
-        style.unpolish(self.btn_system_theme)
-        style.polish(self.btn_system_theme)
+            widget.set_selected(widget.key == current_theme)
+        motion = str(config.get("motion", "full"))
+        for key, button in self.motion_buttons.items():
+            button.setChecked(key == motion)
+        text = next((t for k, _n, t in MOTION_CHOICES if k == motion), "")
+        from app.ui.ink import system_motion_enabled
+
+        if not system_motion_enabled():
+            text += ". Сейчас анимации выключены в Windows — рисунки стоят."
+        self.motion_hint.setText(text)
 
     # --- поведение -------------------------------------------------------
 
@@ -311,6 +397,98 @@ class SettingsPage(Page):
         else:
             winapi.autostart_disable(AUTOSTART_TASK)
             self.context.ok("Автозапуск выключен")
+
+    # --- маршруты VPN ----------------------------------------------------
+
+    def _build_routing(self) -> None:
+        card = Card(padding=20, spacing=14)
+        card.add(section_label("VPN и российские сайты"))
+
+        self.switch_ru = self._add_switch(
+            card, "vpn_ru_direct", "Российские сайты — напрямую",
+            "Сайты в зонах .ru, .su и .рф, банки, Госуслуги, маркетплейсы, "
+            "Яндекс и VK, а ещё российские сети идут мимо VPN и открываются "
+            "как обычно — без отказов «доступно только в России». YouTube, "
+            "Telegram и сервисы, которые сами закрылись для России, остаются в VPN.",
+            on_change=self._toggle_ru_direct,
+        )
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.ru_status = faint_label("")
+        row.addWidget(self.ru_status, 1)
+        self.ru_spinner = Spinner(14, self.context.color("accent"))
+        row.addWidget(self.ru_spinner)
+        self.btn_ru_refresh = Button("Обновить списки", variant="soft")
+        self.btn_ru_refresh.clicked.connect(lambda: self._refresh_ru_lists(quiet=False))
+        row.addWidget(self.btn_ru_refresh)
+        card.add_layout(row)
+        self.body.addWidget(card)
+        self._sync_ru_status()
+
+    def _sync_ru_status(self) -> None:
+        from app.core.vpn import routing
+        from app.ui.naming import long_date
+
+        stamp = routing.lists_date()
+        if stamp:
+            text = (f"Списки roscomvpn от {long_date(stamp).lower()}. "
+                    "Обновляются сами раз в сутки.")
+        else:
+            text = ("Списки roscomvpn: домены уже в программе, российские сети "
+                    "скачаются при первом запуске VPN.")
+        self.ru_status.setText(text)
+        enabled = bool(config.get("vpn_ru_direct", True))
+        self.ru_status.setEnabled(enabled)
+        self.btn_ru_refresh.setEnabled(enabled)
+
+    def _toggle_ru_direct(self, enabled: bool) -> None:
+        from app.ui import vpn_actions
+
+        self._sync_ru_status()
+        if enabled:
+            from app.core.vpn import routing
+
+            if not routing.has_networks():
+                self._refresh_ru_lists(quiet=True)
+        label = "включены" if enabled else "выключены"
+        if vpn_actions.restart_if_running(
+                self, self.context, f"Российские сайты напрямую {label}") is None:
+            self.context.ok(
+                "Российские сайты пойдут мимо VPN" if enabled
+                else "Весь трафик VPN снова идёт через туннель"
+            )
+
+    def _refresh_ru_lists(self, quiet: bool) -> None:
+        from app.core.vpn import routing
+
+        worker = getattr(self, "_ru_worker", None)
+        if worker is not None and worker.busy():
+            return
+        self.btn_ru_refresh.setEnabled(False)
+        self.ru_spinner.start()
+        worker = Worker(self)
+
+        def done(updated) -> None:
+            self.ru_spinner.stop()
+            self._sync_ru_status()
+            if quiet:
+                return
+            if updated:
+                self.context.ok("Списки обновлены — движок подхватит их сам")
+            else:
+                self.context.warn("Не удалось скачать списки: нет доступа к GitHub")
+
+        def failed(message: str) -> None:
+            self.ru_spinner.stop()
+            self._sync_ru_status()
+            if not quiet:
+                self.context.error(f"Не удалось обновить списки: {message}")
+
+        worker.finished.connect(done)
+        worker.failed.connect(failed)
+        worker.run(routing.refresh, True)
+        self._ru_worker = worker
 
     # --- сеть ------------------------------------------------------------
 
@@ -454,11 +632,7 @@ class SettingsPage(Page):
         self.net_status.setText(f"Текущий режим: {net.connectivity_hint()}.")
 
     def apply_theme(self) -> None:
-        self._sync_appearance()
-        self.net_spinner.set_color(self.context.color("accent"))
-        for switch in self._switches:
-            switch.set_colors(
-                self.context.color("accent"),
-                self.context.color("border_strong"),
-                self.context.color("surface"),
-            )
+        if hasattr(self, "theme_cards"):
+            self._sync_appearance()
+        if hasattr(self, "net_spinner"):
+            self.net_spinner.set_color(self.context.color("accent"))

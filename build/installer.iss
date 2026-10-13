@@ -1,7 +1,7 @@
-; Установщик Zapret Control+ (Inno Setup 6)
+; Установщик ZapretCtrl (Inno Setup 6). До 4.0 программа называлась Zapret Control+.
 ; Сборка: build\build.ps1 — он подставит версию и запустит ISCC.
 
-#define AppName "Zapret Control+"
+#define AppName "ZapretCtrl"
 #define AppExeName "ZapretControlPlus.exe"
 #define AppPublisher "Ivan Milyaev (ketamine)"
 #define AppUrl "https://github.com/77WhyNot/ZapretControlPlus"
@@ -23,6 +23,8 @@ VersionInfoDescription={#AppName} — обход блокировок, VPN и Sm
 
 DefaultDirName={autopf}\Zapret Control Plus
 DefaultGroupName={#AppName}
+; Группа в «Пуске» — новая, ZapretCtrl: прежнюю «Zapret Control+» убираем ниже.
+UsePreviousGroup=no
 DisableProgramGroupPage=yes
 AllowNoIcons=yes
 
@@ -46,6 +48,11 @@ WizardImageFile=art\wizard-banner.bmp
 WizardSmallImageFile=art\wizard-small.bmp
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName}
+
+; После установки Проводник перечитывает значки. Иначе на панели задач
+; (особенно у закреплённого ярлыка) остаётся прежний значок из кэша: путь
+; к exe между версиями не меняется.
+ChangesAssociations=yes
 
 CloseApplications=yes
 RestartApplications=no
@@ -76,6 +83,12 @@ Source: "..\payload\zapret\*"; DestDir: "{app}\core"; \
 Source: "..\payload\singbox\*"; DestDir: "{app}\singbox"; \
     Excludes: "cache.db"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+; Ярлыки прежнего имени — чтобы в «Пуске» и на столе не осталось двойников.
+Type: filesandordirs; Name: "{autoprograms}\Zapret Control+"
+Type: files; Name: "{autodesktop}\Zapret Control+.lnk"
+Type: files; Name: "{commondesktop}\Zapret Control+.lnk"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -163,7 +176,7 @@ begin
   if PreviousInstallFound() then
   begin
     ActionPage := CreateInputOptionPage(wpWelcome,
-      'Zapret Control+ уже установлена',
+      'ZapretCtrl уже установлена',
       'На компьютере найдена версия ' + PrevVersion + '.',
       'Выберите, что сделать:', True, False);
     ActionPage.Add('Обновить — настройки, списки и подписка сохранятся');
@@ -257,9 +270,16 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
 begin
-  if (CurStep = ssPostInstall) and WizardSilent() then
-    ShellExec('open', ExpandConstant('{app}\{#AppExeName}'), '',
-              ExpandConstant('{app}'), SW_SHOW, ewNoWait, ResultCode);
+  if CurStep = ssPostInstall then
+  begin
+    { Кэш значков: ie4uinit -show заставляет Windows 10/11 перечитать его. }
+    if FileExists(ExpandConstant('{sys}\ie4uinit.exe')) then
+      Exec(ExpandConstant('{sys}\ie4uinit.exe'), '-show', '', SW_HIDE,
+           ewWaitUntilTerminated, ResultCode);
+    if WizardSilent() then
+      ShellExec('open', ExpandConstant('{app}\{#AppExeName}'), '',
+                ExpandConstant('{app}'), SW_SHOW, ewNoWait, ResultCode);
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

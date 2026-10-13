@@ -1,7 +1,7 @@
 """Иконки рисуем из SVG-строк: никаких шрифтов и внешних файлов.
 
-Стиль — двухтоновый: мягкая заливка того же цвета под контуром. Цвет
-подставляется в момент отрисовки, поэтому иконки сами подхватывают тему.
+Стиль — одна линия, как тушью. Цвет подставляется в момент отрисовки,
+поэтому иконки сами подхватывают тему.
 """
 
 from __future__ import annotations
@@ -11,10 +11,11 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 _STROKE = (
-    'fill="none" stroke="{color}" stroke-width="1.8" '
+    'fill="none" stroke="{color}" stroke-width="1.6" '
     'stroke-linecap="round" stroke-linejoin="round"'
 )
-_FILL = 'fill="{color}" fill-opacity="0.18" stroke="none"'
+# В «Пергаменте» значки — одной линией, как тушью, без заливки.
+_FILL = 'fill="none" stroke="none"'
 
 _SHIELD = "M12 3l7 3v5.5c0 4.3-2.9 7.9-7 9.5-4.1-1.6-7-5.2-7-9.5V6l7-3z"
 _PLANE = "M21 4L3.5 11l6 2.3L12 20l3.2-4.8L21 4z"

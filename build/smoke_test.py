@@ -43,13 +43,14 @@ def check_core() -> None:
 
 
 def check_themes() -> None:
-    for item in theme.THEMES:
-        for accent in theme.ACCENTS:
-            tokens = theme.build_tokens(item.key, accent.key)
-            qss = theme.build_qss(tokens)
-            assert "{" not in qss.replace("{{", "").replace("}}", "") or True
-            assert len(qss) > 1000
-    print(f"  тем: {len(theme.THEMES)}, акцентов: {len(theme.ACCENTS)}")
+    for key in ("light", "dark", "system", "rails", "midnight", "sand"):
+        tokens = theme.build_tokens(key)
+        qss = theme.build_qss(tokens)
+        assert len(qss) > 1000
+    from app.ui import fonts
+
+    assert fonts.load(), "шрифты оформления не найдены"
+    print(f"  тем: {len(theme.THEMES)}, шрифты: ок")
 
 
 def check_window() -> None:
@@ -64,19 +65,34 @@ def check_window() -> None:
         assert page is not None, f"страница {key} не создана"
         print(f"  страница «{title}» — ок")
 
-    for theme_key in ("dark", "midnight", "sand", "light"):
+    for theme_key in ("dark", "system", "light"):
         config.set("theme", theme_key, save=False)
         window.apply_theme()
-    for accent_key in ("emerald", "sapphire", "ruby"):
-        config.set("accent", accent_key, save=False)
-        window.apply_theme()
     print("  переключение тем — ок")
+
+    from app.core import whatsnew
+    from app.ui.tour import Tour, WhatsNew
+
+    tour = Tour(window, window.context)
+    tour.start()
+    for index in range(len(tour.steps)):
+        tour.go(index)
+        application.processEvents()
+    tour.finish(skipped=True)
+    news = WhatsNew(window, window.context, whatsnew.changes_for(), "3.8.0")
+    news.start()
+    application.processEvents()
+    news.close_animated("close")
+    print("  знакомство и «что нового» — ок")
 
     window.close()
     application.processEvents()
 
 
 def main() -> int:
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication(sys.argv)
     print("Проверка ядра:")
     check_core()
     print("Проверка тем:")

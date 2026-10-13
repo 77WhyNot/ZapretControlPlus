@@ -44,6 +44,11 @@ PROXY_TAG = "proxy"
 DIRECT_TAG = "direct"
 AUTO_TAG = "auto"
 
+# Куда программа ходит узнать адрес выхода VPN (engine.exit_address).
+# Часть этих сервисов в списках «Российские сайты — напрямую» помечена как
+# прямая — для самопроверки их всегда держим в туннеле.
+PROBE_DOMAINS = ("ipinfo.io", "api.ip.sb", "ifconfig.co")
+
 # Стек TUN. Для сопоставления процессов на Windows важен системный стек:
 # у gvisor поиск имени процесса по TCP работает не всегда.
 STACK_DEFAULT = "mixed"
@@ -120,10 +125,12 @@ def build_config(
     probe_port: int = 0,
     transport: str = TRANSPORT_TUN,
     proxy_port: int = 10808,
+    ru_direct: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """ru_direct — наборы «Российские сайты — напрямую» (тег → путь) или None."""
     if transport == TRANSPORT_PROXY:
         return build_proxy_config(servers, selected, clash_port, clash_secret,
-                                  log_level, proxy_port)
+                                  log_level, proxy_port, ru_direct)
 
     # Имя программы движок сравнивает посимвольно, поэтому кладём в правило
     # все написания — иначе «telegram.exe» из ручного ввода не совпадёт с
@@ -150,14 +157,36 @@ def build_config(
     if bypass_lan:
         rules.append({"ip_is_private": True, "outbound": DIRECT_TAG})
 
+    # «Российские сайты — напрямую»: из того, что ушло бы в туннель,
+    # российское выпускаем мимо, а YouTube и Telegram держим в туннеле,
+    # даже если их адрес российский. Порядок: сначала «в туннель», потом
+    # «напрямую» — как «block-proxy-direct» в профиле Happ.
+    if ru_direct is not None:
+        from app.core.vpn import routing
+
+        ru_rules = routing.direct_rules(ru_direct, DIRECT_TAG)
+    else:
+        ru_rules = []
+
     if mode == MODE_ALL:
+        if ru_rules:
+            keep = routing.vpn_rule(ru_direct, PROXY_TAG)
+            rules.extend(([keep] if keep else []) + ru_rules)
         final = PROXY_TAG
     elif mode == MODE_EXCEPT:
         if direct_apps:
             rules.append({"process_name": direct_apps, "outbound": DIRECT_TAG})
+        if ru_rules:
+            keep = routing.vpn_rule(ru_direct, PROXY_TAG)
+            rules.extend(([keep] if keep else []) + ru_rules)
         final = PROXY_TAG
     else:
         if vpn_apps:
+            if ru_rules:
+                # Остальные программы и так идут напрямую, поэтому «в туннель»
+                # — только для своих: иначе YouTube потянуло бы в VPN всем.
+                keep = routing.vpn_rule(ru_direct, PROXY_TAG, process_name=vpn_apps)
+                rules.extend(([keep] if keep else []) + ru_rules)
             rules.append({"process_name": vpn_apps, "outbound": PROXY_TAG})
         final = DIRECT_TAG
 
@@ -172,6 +201,12 @@ def build_config(
     if dns_through_tunnel:
         remote_dns["detour"] = PROXY_TAG
     dns_final = "dns-remote" if dns_through_tunnel else "dns-local"
+    dns_rules: list[dict[str, Any]] = []
+    if ru_rules and dns_through_tunnel:
+        # Российские имена — у обычного DNS: ответ через зарубежный сервер
+        # нередко ведёт на зарубежный узел CDN, и сайт открывается медленно.
+        dns_rules.append(routing.dns_rule(ru_direct, "dns-local"))
+    dns_rules.append({"query_type": ["A", "AAAA"], "server": dns_final})
 
     config: dict[str, Any] = {
         "log": {"level": log_level, "timestamp": True},
@@ -180,7 +215,7 @@ def build_config(
                 {"type": "local", "tag": "dns-local"},
                 remote_dns,
             ],
-            "rules": [{"query_type": ["A", "AAAA"], "server": dns_final}],
+            "rules": dns_rules,
             "final": dns_final,
             # Туннель без IPv6 не должен раздавать IPv6-адреса: иначе на
             # машине с IPv6 от провайдера программы, которые предпочитают
@@ -218,6 +253,8 @@ def build_config(
         },
         "experimental": _experimental(clash_port, clash_secret),
     }
+    if ru_rules:
+        config["route"]["rule_set"] = routing.rule_set_entries(ru_direct)
     return config
 
 
@@ -228,8 +265,30 @@ def build_proxy_config(
     clash_secret: str = "",
     log_level: str = "warn",
     proxy_port: int = 10808,
+    ru_direct: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Только локальный прокси: ни адаптера, ни маршрутов, ни перехвата DNS."""
+    rules: list[dict[str, Any]] = [{"action": "sniff"}]
+    rule_sets: list[dict[str, Any]] = []
+    if ru_direct is not None:
+        from app.core.vpn import routing
+
+        # В этом режиме вход один на всех, и самопроверка адреса идёт через
+        # него же: без этого правила она увидела бы настоящий IP.
+        rules.append({"inbound": [PROXY_IN_TAG], "domain": list(PROBE_DOMAINS),
+                      "outbound": PROXY_TAG})
+        keep = routing.vpn_rule(ru_direct, PROXY_TAG, inbound=[PROXY_IN_TAG])
+        rules.extend(([keep] if keep else [])
+                     + routing.direct_rules(ru_direct, DIRECT_TAG))
+        rule_sets = routing.rule_set_entries(ru_direct)
+    rules.append({"inbound": [PROXY_IN_TAG], "outbound": PROXY_TAG})
+    route: dict[str, Any] = {
+        "rules": rules,
+        "final": DIRECT_TAG,
+        "default_domain_resolver": "dns-local",
+    }
+    if rule_sets:
+        route["rule_set"] = rule_sets
     return {
         "log": {"level": log_level, "timestamp": True},
         "dns": {
@@ -247,14 +306,7 @@ def build_proxy_config(
             }
         ],
         "outbounds": _outbounds(servers, selected),
-        "route": {
-            "rules": [
-                {"action": "sniff"},
-                {"inbound": [PROXY_IN_TAG], "outbound": PROXY_TAG},
-            ],
-            "final": DIRECT_TAG,
-            "default_domain_resolver": "dns-local",
-        },
+        "route": route,
         "experimental": _experimental(clash_port, clash_secret),
     }
 

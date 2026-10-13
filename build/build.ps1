@@ -27,7 +27,7 @@ function Step($text) {
 # --- версия ---------------------------------------------------------------
 $version = & python -c "import re,pathlib;print(re.search(r'APP_VERSION = \x22([^\x22]+)\x22', pathlib.Path('app/core/constants.py').read_text(encoding='utf-8')).group(1))"
 if (-not $version) { throw "Не удалось определить версию из app/core/constants.py" }
-Write-Host "Zapret Control+ $version" -ForegroundColor Green
+Write-Host "ZapretCtrl $version" -ForegroundColor Green
 
 # version.txt читает автообновление приложения с GitHub.
 # Без BOM: иначе проверка обновлений не признаёт версию за версию.

@@ -29,12 +29,16 @@ from app.ui.widgets import (
 class ListsPage(Page):
     def __init__(self, context: AppContext,
                  parent: QWidget | None = None) -> None:
+        from app.ui import scenes
+
         super().__init__(
             context,
-            "Списки сайтов",
+            "Адресная *книга*",
             "Что обходить, а что трогать не нужно. Изменения применяются "
             "после перезапуска обхода.",
             parent,
+            eyebrow="Ещё · списки сайтов",
+            scene=scenes.address_book,
         )
         self._current_key = lists_module.USER_LISTS[0].key
         self._dirty = False

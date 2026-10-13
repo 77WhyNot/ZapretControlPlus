@@ -421,6 +421,15 @@ class VpnEngine:
         else:
             self._probe_port = _free_port(0)
 
+        # «Российские сайты — напрямую»: наборы берём с диска сразу, а свежие
+        # докачиваются в фоне — движок подхватит их сам, без перезапуска.
+        ru_direct = None
+        if bool(settings.get("vpn_ru_direct", True)):
+            from app.core.vpn import routing
+
+            ru_direct = routing.prepare()
+            routing.refresh_async()
+
         config = config_module.build_config(
             servers, selected=selected, mode=mode,
             vpn_apps=vpn_apps, direct_apps=direct_apps,
@@ -434,6 +443,7 @@ class VpnEngine:
             probe_port=self._probe_port if transport == config_module.TRANSPORT_TUN else 0,
             transport=transport,
             proxy_port=proxy_port,
+            ru_direct=ru_direct,
         )
         self.config_path.write_text(
             json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -447,7 +457,9 @@ class VpnEngine:
 
         mode_label = config_module.MODE_LABELS.get(mode, mode)
         transport_label = "туннель" if transport == config_module.TRANSPORT_TUN else "прокси"
-        logs.info(f"Запуск VPN ({transport_label}): сервер «{selected}», режим «{mode_label}»")
+        ru_label = ", российские сайты напрямую" if ru_direct is not None else ""
+        logs.info(f"Запуск VPN ({transport_label}): сервер «{selected}», "
+                  f"режим «{mode_label}»{ru_label}")
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         try:
@@ -573,6 +585,8 @@ class VpnEngine:
             "https": f"http://127.0.0.1:{self._probe_port}",
         }
         errors = []
+        # Хосты — те же, что в config_module.PROBE_DOMAINS: в режиме «Прокси»
+        # их держит в туннеле отдельное правило.
         for url in ("https://ipinfo.io/json", "https://api.ip.sb/geoip",
                     "https://ifconfig.co/json"):
             try:

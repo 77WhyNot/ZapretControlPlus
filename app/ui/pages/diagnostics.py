@@ -111,12 +111,16 @@ class CheckRow(QWidget):
 class DiagnosticsPage(Page):
     def __init__(self, context: AppContext,
                  parent: QWidget | None = None) -> None:
+        from app.ui import scenes
+
         super().__init__(
             context,
-            "Диагностика",
+            "Осмотр *сада*",
             "Проверяем всё, что обычно мешает обходу работать: службы, "
             "драйверы, конкурирующие программы и настройки сети.",
             parent,
+            eyebrow="Диагностика",
+            scene=scenes.inspection,
         )
         self._ran_once = False
         self._build_summary()

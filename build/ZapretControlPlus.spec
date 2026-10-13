@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Сборка Zapret Control.
+"""Сборка ZapretCtrl (до 4.0 — Zapret Control+).
 
 Собираем onedir: ядро zapret должно лежать рядом с exe и обновляться,
 а onefile распаковывал бы всё во временную папку при каждом запуске.
@@ -43,6 +43,11 @@ a = Analysis(
     datas=[
         (str(ROOT / "app" / "resources" / "icon.ico"), "resources"),
         (str(ROOT / "app" / "resources" / "icon.png"), "resources"),
+        # Шрифты оформления (SIL OFL) и снимки прежнего облика для «Что нового».
+        (str(ROOT / "app" / "resources" / "fonts"), "resources/fonts"),
+        (str(ROOT / "app" / "resources" / "legacy"), "resources/legacy"),
+        # «Российские сайты — напрямую»: доменные наборы roscomvpn (MIT).
+        (str(ROOT / "app" / "resources" / "routing"), "resources/routing"),
     ],
     hiddenimports=["app", "app.ui.window"],
     hookspath=[],
