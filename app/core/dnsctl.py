@@ -47,22 +47,12 @@ PRESETS: tuple[DnsPreset, ...] = (
         ipv4=(),
     ),
     DnsPreset(
-        key="xbox",
-        title="Xbox DNS",
-        description=(
-            "Возвращает доступ к Xbox Live и Game Pass (ошибка 0x80a40401), "
-            "а также к ChatGPT, Twitch и Spotify. Через себя гонит только "
-            "заблокированные запросы, остальное идёт напрямую."
-        ),
-        ipv4=("111.88.96.50", "111.88.96.51"),
-        ipv6=("2a00:ab00:1233:26::50", "2a00:ab00:1233:26::51"),
-        doh="https://xbox-dns.ru/dns-query",
-        site="https://xbox-dns.ru/",
-    ),
-    DnsPreset(
         key="comss",
         title="Comss DNS",
-        description="Российский сервис разблокировки с фильтрацией рекламы.",
+        description=(
+            "Возвращает сервисы, закрытые для России по стране: ChatGPT, Claude, "
+            "Gemini, Spotify, игровые сервисы. Заодно режет рекламу."
+        ),
         ipv4=("83.220.169.155", "212.109.195.93"),
         doh="https://dns.comss.one/dns-query",
         site="https://www.comss.ru/page.php?id=7315",
@@ -92,6 +82,22 @@ PRESETS: tuple[DnsPreset, ...] = (
 )
 
 PRESET_BY_KEY = {preset.key: preset for preset in PRESETS}
+
+# Сервисы, которых больше нет. Xbox DNS закрыт в октябре 2026 года: хостинг
+# заблокировал его по требованию ЦМУ ССОП (Роскомнадзора), DNS-запросы к его
+# адресам режутся у провайдеров. Это решается не на стороне программы —
+# поэтому сервис убран, а у кого он остался в системе, переводим на Comss.
+RETIRED_PRESETS = {
+    "xbox": DnsPreset(
+        key="xbox",
+        title="Xbox DNS",
+        description="Закрыт по требованию Роскомнадзора в октябре 2026 года.",
+        ipv4=("111.88.96.50", "111.88.96.51"),
+        ipv6=("2a00:ab00:1233:26::50", "2a00:ab00:1233:26::51"),
+        doh="https://xbox-dns.ru/dns-query",
+    ),
+}
+RETIRED_REPLACEMENT = "comss"
 
 
 @dataclass
@@ -189,7 +195,31 @@ def current_preset() -> str:
             continue
         if any(set(preset.ipv4).issubset(set(servers)) for servers in applied):
             return preset.key
+    for key, preset in RETIRED_PRESETS.items():
+        if any(set(preset.ipv4) & set(servers) for servers in applied):
+            return f"retired:{key}"
     return "custom"
+
+
+def retired_title(key: str) -> str:
+    """Название закрытого сервиса по ключу вида retired:xbox."""
+    preset = RETIRED_PRESETS.get(key.split(":", 1)[-1])
+    return preset.title if preset else ""
+
+
+def forget_retired_doh() -> None:
+    """Убрать из Windows шифрованный DNS закрытых сервисов."""
+    for preset in RETIRED_PRESETS.values():
+        for address in (*preset.ipv4, *preset.ipv6):
+            _netsh(["dns", "delete", "encryption", f"server={address}"])
+
+
+def replace_retired() -> str:
+    """Закрытый сервис всё ещё стоит в системе — поставить живой вместо него."""
+    forget_retired_doh()
+    text = apply_preset(RETIRED_REPLACEMENT)
+    logs.info("Закрытый Xbox DNS заменён на Comss DNS")
+    return text
 
 
 # --- применение ----------------------------------------------------------

@@ -32,6 +32,9 @@ class AppContext(QObject):
         self._tokens = theme.build_tokens(
             str(config.get("theme")), str(config.get("accent"))
         )
+        from app.ui import widgets
+
+        widgets.set_tokens(self._tokens)
         self._status = engine.status()
         self._tunnels: list[str] = []
         self._foreign: list[str] = []
@@ -55,6 +58,9 @@ class AppContext(QObject):
         self._tokens = theme.build_tokens(
             str(config.get("theme")), str(config.get("accent"))
         )
+        from app.ui import widgets
+
+        widgets.set_tokens(self._tokens)
         qss = theme.build_qss(self._tokens)
         self.theme_changed.emit()
         return qss

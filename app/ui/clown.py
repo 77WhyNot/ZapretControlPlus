@@ -83,10 +83,10 @@ class ClownScreen(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         width, height = self.width(), self.height()
-        painter.fillRect(self.rect(), QColor("#0B0E14"))
+        painter.fillRect(self.rect(), QColor("#1A1918"))
         elapsed = time.perf_counter() - self._started
 
-        font = QFont("Bahnschrift", 12)
+        font = QFont("Literata", 12)
         for left, top, size, speed, phase, angle in self._motes:
             # Надписи медленно всплывают и по кругу возвращаются вниз.
             y = ((top - elapsed * speed) % 1.15 - 0.08) * height
@@ -113,7 +113,7 @@ class ClownScreen(QWidget):
                          Qt.AlignmentFlag.AlignCenter, CLOWN)
         painter.restore()
 
-        hint = QFont("Bahnschrift", 11)
+        hint = QFont("Geist Mono", 11)
         painter.setFont(hint)
         painter.setPen(QColor(226, 232, 244, 90))
         painter.drawText(QRect(0, height - 60, width, 40),

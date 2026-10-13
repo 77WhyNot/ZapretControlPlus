@@ -33,7 +33,11 @@ from app.ui.widgets import (
 class AboutPage(Page):
     def __init__(self, context: AppContext,
                  parent: QWidget | None = None) -> None:
-        super().__init__(context, "О программе", "", parent)
+        super().__init__(
+            context, "Письмо от *автора*",
+            "Что это за программа, как она устроена и кому спасибо.",
+            parent, eyebrow="Ещё · о программе",
+        )
 
         self._build_hero()
         self._build_how()
@@ -42,26 +46,36 @@ class AboutPage(Page):
         self.apply_theme()
 
     def _build_hero(self) -> None:
-        card = Card(padding=24, spacing=16)
+        from app.core.constants import APP_EDITION
+        from app.ui import scenes
+        from app.ui.ink import InkCanvas
+        from app.ui.widgets import MonoLabel, SerifTitle
+
+        card = Card(padding=22, spacing=16)
 
         top = QHBoxLayout()
-        top.setSpacing(16)
+        top.setSpacing(24)
         self.logo = IconLabel("shield_check", self.context.color("accent"), 46)
-        top.addWidget(self.logo, 0, Qt.AlignmentFlag.AlignTop)
+        self.logo.hide()
+        envelope = InkCanvas(scenes.envelope(), self.context, plate="plate", radius=18)
+        envelope.setFixedWidth(250)
+        top.addWidget(envelope, 0, Qt.AlignmentFlag.AlignTop)
 
         text_box = QVBoxLayout()
-        text_box.setSpacing(4)
-        title = QLabel(APP_NAME)
-        title.setStyleSheet("font-size: 20px; font-weight: 650;")
-        text_box.addWidget(title)
+        text_box.setSpacing(6)
+        text_box.addWidget(MonoLabel(f"версия {APP_VERSION} {APP_EDITION}".strip(),
+                                     self.context, "accent_ink", 11))
+        text_box.addWidget(SerifTitle(APP_NAME, self.context, 34))
         text_box.addWidget(muted_label(
             "Обход блокировок, VPN по программам, прокси Telegram и Smart DNS — "
             "в одном окне. В основе обхода — zapret: стратегии, которые раньше "
-            "запускали .bat-файлами и меню в консоли."
+            "запускали .bat-файлами и меню в консоли. С версии 4.0 программа "
+            "называется ZapretCtrl и нарисована от руки: сад, почта и море."
         ))
         author = QLabel(f"Автор — {APP_AUTHOR_FULL}")
-        author.setStyleSheet("font-weight: 600; margin-top: 4px;")
+        author.setStyleSheet("font-weight: 500; margin-top: 4px;")
         text_box.addWidget(author)
+        text_box.addStretch(1)
         top.addLayout(text_box, 1)
         card.add_layout(top)
 
@@ -159,16 +173,19 @@ class AboutPage(Page):
             ("Flowseal / tg-ws-proxy",
              "Прокси Telegram через WebSocket — его ядро работает внутри программы (MIT).",
              "https://github.com/Flowseal/tg-ws-proxy"),
-            ("xbox-dns.ru",
-             "Адреса Smart DNS для Xbox и сервисов с блокировкой по стране.",
-             "https://xbox-dns.ru/"),
+            ("Comss DNS",
+             "Smart DNS для сервисов, закрытых по стране, — он стоит в программе по умолчанию.",
+             "https://www.comss.ru/page.php?id=7315"),
+            ("Literata, Geist, Geist Mono",
+             "Шрифты оформления — под свободной лицензией SIL OFL 1.1.",
+             "https://openfontlicense.org"),
         )
         for row, (name, description, url) in enumerate(entries):
             # Цвет ссылки задаёт палитра окна (под тему), а не стиль подписи:
             # стиль до текста ссылки не доходит, и в тёмной теме она тонула.
             label = QLabel(f'<a href="{url}">{name}</a>')
             label.setOpenExternalLinks(True)
-            label.setStyleSheet("font-weight: 600;")
+            label.setStyleSheet("font-weight: 500;")
             grid.addWidget(label, row, 0)
             grid.addWidget(faint_label(description), row, 1)
         grid.setColumnStretch(1, 1)
@@ -187,7 +204,7 @@ class AboutPage(Page):
             line = QHBoxLayout()
             line.setSpacing(12)
             name = QLabel(caption)
-            name.setStyleSheet("font-weight: 600;")
+            name.setStyleSheet("font-weight: 500;")
             name.setFixedWidth(160)
             line.addWidget(name)
             path_label = faint_label(value)

@@ -1,4 +1,9 @@
-"""Темы оформления: палитры, акцентные цвета и генерация QSS."""
+"""Тема «Пергамент»: бумага цвета слоновой кости днём и тёплая ночь.
+
+Все нейтральные тона тёплые, без холодных серых. Один насыщенный акцент —
+глина. Остальные краски (олива, крафт, небо, манила) — для рисунков и для
+цвета маршрутов: обход — глина, VPN — небо, Telegram — крафт, DNS — олива.
+"""
 
 from __future__ import annotations
 
@@ -20,144 +25,53 @@ class ThemeDef:
     colors: dict[str, str]
 
 
+PAPER = {
+    # поверхности
+    "bg": "#FAF9F5", "side": "#F3F1EA", "card": "#F0EEE6", "card2": "#EBE8DE",
+    "plate": "#E3DACC", "field": "#FAF9F5",
+    # тушь и текст
+    "ink": "#141413", "ink2": "#3D3D3A", "ink3": "#5E5D59", "muted": "#73726C",
+    "decor": "#87867F", "pencil": "#AEABA1",
+    # акцент и состояние
+    "accent": "#C6613F", "accent_ink": "#A84B2A", "ok": "#4F6A3A",
+    "warn": "#9A6524", "bad": "#B23A2B", "btn": "#141413", "on_btn": "#FAF9F5",
+    # краски рисунков
+    "clay": "#D97757", "olive": "#788C5D", "matcha": "#CED6BF", "kraft": "#D4A27F",
+    "manilla": "#EBDBBC", "sky": "#6A9BCC", "sky_ink": "#3F6FA0", "soil": "#D6C1A3",
+    "sea": "#D3DAD6", "hill": "#CED6BF", "hill2": "#B9C4A6", "ground": "#C3CCB0",
+    "wall": "#EFE5D2", "glow": "#F7ECD6", "cut": "#E3DACC", "pm": "#C6613F",
+    "stamp_paper": "#FBF8F1", "stamp_desk": "#E9E4D8",
+}
+
+NIGHT = {
+    "bg": "#1A1918", "side": "#161514", "card": "#232220", "card2": "#292826",
+    "plate": "#2A2926", "field": "#1A1918",
+    "ink": "#ECE9E0", "ink2": "#D6D3CA", "ink3": "#B0AEA5", "muted": "#9C9A92",
+    "decor": "#6B6A64", "pencil": "#6A6862",
+    "accent": "#D97757", "accent_ink": "#E08A6C", "ok": "#A8BB8A",
+    "warn": "#D9A066", "bad": "#E5806E", "btn": "#ECE9E0", "on_btn": "#1A1918",
+    "clay": "#D97757", "olive": "#7F9463", "matcha": "#4A5540", "kraft": "#C4936F",
+    "manilla": "#EBDBBC", "sky": "#6A9BCC", "sky_ink": "#8FB4DC", "soil": "#3A332B",
+    "sea": "#1F272B", "hill": "#323A2C", "hill2": "#3B4433", "ground": "#2A3025",
+    "wall": "#3B3732", "glow": "#EBDBBC", "cut": "#2A2926", "pm": "#D97757",
+    "stamp_paper": "#ECE6D8", "stamp_desk": "#24231F",
+}
+
 THEMES: tuple[ThemeDef, ...] = (
-    ThemeDef("rails", "Рельсы", True, {
-        "bg": "#0E1219",
-        "surface": "#121821",
-        "surface_alt": "#161E29",
-        "sidebar": "#0B0F15",
-        "titlebar": "#0B0F15",
-        "border": "#1E2733",
-        "border_strong": "#2A3441",
-        "text": "#DCE3ED",
-        "text_dim": "#8593A6",
-        "text_faint": "#5E6B7D",
-        "hover": "#16202C",
-        "input": "#0D131B",
-        "code_bg": "#090D13",
-        "success": "#3FD08A",
-        "warning": "#E9A23B",
-        "danger": "#E0284F",
-        "success_bg": "#0F2A20",
-        "warning_bg": "#2A2314",
-        "danger_bg": "#2A121C",
-        "scroll": "#2A3441",
-    }),
-    ThemeDef("light", "Светлая", False, {
-        "bg": "#F3F5F8",
-        "surface": "#FFFFFF",
-        "surface_alt": "#F8FAFC",
-        "sidebar": "#FFFFFF",
-        "titlebar": "#FFFFFF",
-        "border": "#E3E7ED",
-        "border_strong": "#CDD4DE",
-        "text": "#12161C",
-        "text_dim": "#576070",
-        "text_faint": "#8C95A4",
-        "hover": "#EEF1F5",
-        "input": "#FFFFFF",
-        "code_bg": "#F6F8FA",
-        "success": "#0E8A5F",
-        "warning": "#B25E09",
-        "danger": "#C6293B",
-        "success_bg": "#E6F6EF",
-        "warning_bg": "#FDF3E4",
-        "danger_bg": "#FCEBEC",
-        "scroll": "#C9D0DA",
-    }),
-    ThemeDef("dark", "Тёмная", True, {
-        "bg": "#15181E",
-        "surface": "#1D212A",
-        "surface_alt": "#232833",
-        "sidebar": "#1A1E26",
-        "titlebar": "#1A1E26",
-        "border": "#2C323E",
-        "border_strong": "#3B4351",
-        "text": "#E8ECF3",
-        "text_dim": "#9CA7B8",
-        "text_faint": "#6E7889",
-        "hover": "#262C38",
-        "input": "#1A1F28",
-        "code_bg": "#12161D",
-        "success": "#3ECF8E",
-        "warning": "#E9A23B",
-        "danger": "#F2606F",
-        "success_bg": "#152A22",
-        "warning_bg": "#2C2415",
-        "danger_bg": "#2E1A1E",
-        "scroll": "#39414F",
-    }),
-    ThemeDef("midnight", "Полночь", True, {
-        "bg": "#080B12",
-        "surface": "#101725",
-        "surface_alt": "#151D2E",
-        "sidebar": "#0C121D",
-        "titlebar": "#0C121D",
-        "border": "#1D2739",
-        "border_strong": "#2B3852",
-        "text": "#DEE5F2",
-        "text_dim": "#8E9CB5",
-        "text_faint": "#5F6C85",
-        "hover": "#182134",
-        "input": "#0D1420",
-        "code_bg": "#070A11",
-        "success": "#38D39F",
-        "warning": "#EDAF4B",
-        "danger": "#FF6B7E",
-        "success_bg": "#0C2620",
-        "warning_bg": "#2A2213",
-        "danger_bg": "#2B1620",
-        "scroll": "#2A3648",
-    }),
-    ThemeDef("sand", "Тёплая", False, {
-        "bg": "#F6F2EC",
-        "surface": "#FFFDFA",
-        "surface_alt": "#FAF6F0",
-        "sidebar": "#FFFDFA",
-        "titlebar": "#FFFDFA",
-        "border": "#E7DFD4",
-        "border_strong": "#D2C7B8",
-        "text": "#1E1A15",
-        "text_dim": "#6A6055",
-        "text_faint": "#968B7D",
-        "hover": "#F1EBE2",
-        "input": "#FFFDFA",
-        "code_bg": "#F7F3ED",
-        "success": "#0E8A5F",
-        "warning": "#B25E09",
-        "danger": "#C6293B",
-        "success_bg": "#E8F5EE",
-        "warning_bg": "#FBF1E1",
-        "danger_bg": "#FBEAEA",
-        "scroll": "#D6CCBE",
-    }),
+    ThemeDef("light", "Бумага", False, PAPER),
+    ThemeDef("dark", "Ночь", True, NIGHT),
 )
 
 THEME_BY_KEY = {theme.key: theme for theme in THEMES}
 
+# Ключи тем прошлых версий: у кого была тёмная — та остаётся тёмной.
+LEGACY_THEMES = {"rails": "dark", "midnight": "dark", "sand": "light"}
 
-@dataclass(frozen=True)
-class AccentDef:
-    key: str
-    title: str
-    base: str
-    hover: str
-    press: str
-    on_accent: str = "#FFFFFF"
-
-
-ACCENTS: tuple[AccentDef, ...] = (
-    AccentDef("ruby", "Рубин", "#D42250", "#E63862", "#B01840"),
-    AccentDef("cyan", "Бирюза", "#22C6D8", "#3AD6E6", "#17A6B6", "#04131A"),
-    AccentDef("amber", "Янтарь", "#CF7211", "#E28320", "#AC5D0B"),
-    AccentDef("emerald", "Изумруд", "#0E9F6E", "#16B27D", "#0A8159"),
-    AccentDef("sapphire", "Сапфир", "#2563EB", "#3B76F0", "#1D4FC4"),
-    AccentDef("violet", "Аметист", "#7C3AED", "#8C4FF2", "#672FC7"),
-    AccentDef("teal", "Морская волна", "#0D8E93", "#12A2A8", "#0A7276"),
-    AccentDef("graphite", "Графит", "#4A5567", "#5A6678", "#3A4353"),
+THEME_CHOICES = (
+    ("light", "Бумага", "Днём: слоновая кость и тушь"),
+    ("dark", "Ночь", "Вечером: тёплая темнота и луна"),
+    ("system", "Как в Windows", "Сама переходит вслед за системой"),
 )
-
-ACCENT_BY_KEY = {accent.key: accent for accent in ACCENTS}
 
 
 # =========================================================================
@@ -201,63 +115,82 @@ def system_prefers_dark() -> bool:
         return False
 
 
+def normalize_theme_key(key: str) -> str:
+    """Ключ из настроек → light / dark / system."""
+    key = LEGACY_THEMES.get(key, key)
+    return key if key in ("light", "dark", "system") else "light"
+
+
 def resolve_theme_key(key: str) -> str:
+    key = normalize_theme_key(key)
     if key == "system":
         return "dark" if system_prefers_dark() else "light"
-    return key if key in THEME_BY_KEY else "light"
+    return key
 
 
-def build_tokens(theme_key: str, accent_key: str) -> dict[str, str]:
+def build_tokens(theme_key: str, accent_key: str = "") -> dict[str, str]:
+    """Палитра в виде словаря. accent_key оставлен для совместимости."""
     theme = THEME_BY_KEY[resolve_theme_key(theme_key)]
-    accent = ACCENT_BY_KEY.get(accent_key, ACCENT_BY_KEY["sapphire"])
+    c = dict(theme.colors)
+    dark = theme.dark
+    bg, ink = c["bg"], c["ink"]
 
-    tokens = dict(theme.colors)
+    tokens = dict(c)
     tokens.update({
-        "accent": accent.base,
-        "accent_hover": accent.hover,
-        "accent_press": accent.press,
-        "on_accent": accent.on_accent,
-        "is_dark": "1" if theme.dark else "0",
+        "is_dark": "1" if dark else "0",
+        # Имена, на которые опираются страницы.
+        "surface": c["card"],
+        "surface_alt": c["card2"],
+        "sidebar": c["side"],
+        "titlebar": c["side"],
+        "border": mix(bg, ink, 0.10 if not dark else 0.09),
+        "border_strong": mix(bg, ink, 0.17 if not dark else 0.16),
+        "text": ink,
+        "text_dim": c["ink3"],
+        "text_faint": c["muted"],
+        "hover": c["card2"],
+        "input": c["field"],
+        "code_bg": c["side"],
+        "success": c["ok"],
+        "warning": c["warn"],
+        "danger": c["bad"],
+        "success_bg": mix(bg, c["olive"], 0.16 if not dark else 0.20),
+        "warning_bg": mix(bg, c["kraft"], 0.24 if not dark else 0.18),
+        "danger_bg": mix(bg, c["clay"], 0.16 if not dark else 0.18),
+        "scroll": mix(bg, ink, 0.22),
+        "accent_hover": mix(c["accent"], ink if not dark else "#FFFFFF", 0.12),
+        "accent_press": mix(c["accent"], "#000000", 0.15),
+        "on_accent": "#FAF9F5" if not dark else "#1A1918",
+        "accent_text": c["accent_ink"],
+        "accent_soft": mix(c["card"], c["clay"], 0.14 if not dark else 0.18),
+        "accent_soft_hover": mix(c["card"], c["clay"], 0.22 if not dark else 0.26),
+        "accent_border": mix(bg, c["clay"], 0.45),
+        "overlay": rgba("#141413", 0.32 if not dark else 0.55),
+        "btn_hover": mix(c["btn"], bg, 0.16),
     })
-    # Мягкие подложки акцента: на тёмной теме подмешиваем к фону, на светлой — к белому.
-    base_for_tint = theme.colors["surface"]
-    tokens["accent_soft"] = mix(base_for_tint, accent.base, 0.16 if theme.dark else 0.10)
-    tokens["accent_soft_hover"] = mix(base_for_tint, accent.base, 0.24 if theme.dark else 0.16)
-    tokens["accent_border"] = mix(theme.colors["border"], accent.base, 0.45)
-    tokens["accent_text"] = accent.hover if theme.dark else accent.press
-    tokens["overlay"] = rgba("#000000", 0.45 if theme.dark else 0.28)
 
-    # Цвета маршрутов — это не украшение, а способ читать состояние:
-    # один и тот же цвет означает один и тот же путь трафика во всей программе.
-    tokens["lane_direct"] = "#7C8AA0" if theme.dark else "#68758A"
-    # Обход — главный инструмент, он носит цвет программы (акцент).
-    # Остальные — своя холодная гамма: Telegram — небесный, DNS — бирюза.
-    tokens["lane_zapret"] = tokens["accent"]
-    tokens["lane_dns"] = "#2DD4BF" if theme.dark else "#0F9D8A"
-    tokens["lane_tg"] = "#38BDF8" if theme.dark else "#1A9BD7"
-    # Чужой туннель — намеренно приглушённый: это не наш инструмент,
-    # мы им не управляем и только сообщаем, что он поднят.
-    tokens["lane_vpn"] = "#A78BFA" if theme.dark else "#7C3AED"
-    tokens["lane_foreign"] = "#8B7BD8" if theme.dark else "#8A7FB8"
-    tokens["lane_direct_soft"] = mix(theme.colors["surface"], tokens["lane_direct"],
-                                     0.18 if theme.dark else 0.12)
-    tokens["lane_zapret_soft"] = mix(theme.colors["surface"], tokens["lane_zapret"],
-                                     0.18 if theme.dark else 0.10)
-    tokens["lane_dns_soft"] = mix(theme.colors["surface"], tokens["lane_dns"],
-                                  0.18 if theme.dark else 0.10)
-    tokens["lane_tg_soft"] = mix(theme.colors["surface"], tokens["lane_tg"],
-                                 0.18 if theme.dark else 0.10)
-    tokens["lane_vpn_soft"] = mix(theme.colors["surface"], tokens["lane_vpn"],
-                                  0.18 if theme.dark else 0.10)
-    tokens["lane_foreign_soft"] = mix(theme.colors["surface"], tokens["lane_foreign"],
-                                      0.18 if theme.dark else 0.10)
+    # Цвета маршрутов — способ читать состояние: один цвет — один путь
+    # трафика во всей программе. Совпадают с подкраской марок на главной.
+    lanes = {
+        "lane_direct": c["decor"],
+        "lane_zapret": c["accent"],
+        "lane_vpn": c["sky_ink"] if not dark else c["sky"],
+        "lane_tg": "#A26C3E" if not dark else c["kraft"],
+        "lane_dns": "#5F7346" if not dark else "#A8BB8A",
+        "lane_foreign": "#8A7F9E" if not dark else "#A497B8",
+    }
+    tokens.update(lanes)
+    for name, value in lanes.items():
+        tokens[f"{name}_soft"] = mix(c["card"], value, 0.14 if not dark else 0.20)
+    # Подкраска марок: включённая марка теплеет своим цветом.
+    tokens.update({
+        "tint_dpi": "#F4DCCD", "tint_vpn": "#DBE4EC",
+        "tint_tg": "#EFE1CC", "tint_dns": "#E0E6D4", "tint_off": "#F1EEE6",
+    } if not dark else {
+        "tint_dpi": "#E9CDBA", "tint_vpn": "#CCD8E3",
+        "tint_tg": "#E3D3BB", "tint_dns": "#D3DBC4", "tint_off": "#E4DFD3",
+    })
     return tokens
-
-
-# Шрифты: Bahnschrift — это DIN, дорожный указатель. Для программы про
-# маршруты трафика он к месту и есть в Windows 10 и 11 из коробки.
-DISPLAY_FONT = '"Bahnschrift", "Franklin Gothic Medium", "Segoe UI", sans-serif'
-MONO_FONT = '"Cascadia Mono", "Consolas", monospace'
 
 
 # =========================================================================
@@ -266,83 +199,51 @@ MONO_FONT = '"Cascadia Mono", "Consolas", monospace'
 
 QSS_TEMPLATE = """
 * {{
-    font-family: "Segoe UI", "Inter", sans-serif;
-    font-size: 13px;
+    font-family: "Geist", "Segoe UI", sans-serif;
+    font-size: 13.5px;
     color: {text};
 }}
 
-/* Окно без системной рамки: скруглять углы нельзя — без прозрачности
-   за ними остался бы мусор, поэтому рисуем аккуратную рамку в 1 пиксель. */
 QWidget#Root {{
     background: {bg};
     border: 1px solid {border_strong};
 }}
 
-/* ---------- Заголовок окна ---------- */
+/* ---------- Заголовок окна и закладки ---------- */
 
-QWidget#TitleBar {{
-    background: {titlebar};
-    border-bottom: 1px solid {border};
-}}
+QWidget#TitleBar {{ background: {side}; }}
+QWidget#TabBar {{ background: {side}; }}
 
 QLabel#TitleText {{
     font-size: 13px;
-    font-weight: 600;
-    color: {text};
-}}
-
-QLabel#TitleVersion {{
-    font-size: 11px;
-    color: {text_faint};
-}}
-
-QPushButton#WinButton {{
-    background: transparent;
-    border: none;
-    border-radius: 6px;
-    padding: 0px;
-    min-width: 38px;
-    max-width: 38px;
-    min-height: 28px;
-    max-height: 28px;
-}}
-QPushButton#WinButton:hover {{ background: {hover}; }}
-QPushButton#WinButton:pressed {{ background: {border}; }}
-QPushButton#WinClose:hover {{ background: {danger}; }}
-
-/* ---------- Боковое меню ---------- */
-
-QWidget#Sidebar {{
-    background: {sidebar};
-    border-right: 1px solid {border};
-}}
-
-QPushButton#NavButton {{
-    background: transparent;
-    border: none;
-    border-radius: 9px;
-    padding: 9px 12px;
-    text-align: left;
-    font-size: 13px;
     font-weight: 500;
-    color: {text_dim};
-}}
-QPushButton#NavButton:hover {{
-    background: {hover};
     color: {text};
+    background: transparent;
 }}
-QPushButton#NavButton:checked {{
-    background: {accent_soft};
-    color: {accent_text};
-    font-weight: 600;
+QLabel#TitleVersion {{
+    font-family: "Geist Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: {muted};
+    background: transparent;
+}}
+QLabel#TitleState {{
+    font-size: 12px;
+    color: {ink3};
+    background: transparent;
 }}
 
-QLabel#NavSection {{
-    color: {text_faint};
-    font-size: 11px;
-    font-weight: 600;
-    padding: 6px 12px 2px 12px;
+QPushButton#WinButton, QPushButton#WinClose {{
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    padding: 0px;
+    min-width: 38px; max-width: 38px;
+    min-height: 30px; max-height: 30px;
 }}
+QPushButton#WinButton:hover {{ background: {card}; }}
+QPushButton#WinButton:pressed {{ background: {card2}; }}
+QPushButton#WinClose:hover {{ background: {bad}; }}
 
 /* ---------- Контент ---------- */
 
@@ -351,68 +252,74 @@ QScrollArea {{ background: transparent; border: none; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 
 QLabel#PageTitle {{
-    font-family: "Bahnschrift", "Franklin Gothic Medium", "Segoe UI", sans-serif;
-    font-size: 25px;
-    font-weight: 600;
-    letter-spacing: 0.2px;
-    color: {text};
-}}
-
-QLabel#HeroTitle {{
-    font-family: "Bahnschrift", "Franklin Gothic Medium", "Segoe UI", sans-serif;
-    font-size: 23px;
-    font-weight: 600;
+    font-family: "Literata", Georgia, serif;
+    font-size: 34px;
+    font-weight: 300;
     color: {text};
     background: transparent;
 }}
+QLabel#HeroTitle {{
+    font-family: "Literata", Georgia, serif;
+    font-size: 40px;
+    font-weight: 300;
+    color: {text};
+    background: transparent;
+}}
+QLabel#CardTitle, QLabel#SectionTitle {{
+    font-family: "Literata", Georgia, serif;
+    font-size: 20px;
+    font-weight: 400;
+    color: {text};
+    background: transparent;
+}}
+QLabel#PageSubtitle, QLabel#Lede {{
+    font-size: 14.5px;
+    color: {ink3};
+    background: transparent;
+}}
+QLabel#Muted {{ color: {ink3}; background: transparent; }}
+QLabel#Faint {{ color: {muted}; font-size: 12.5px; background: transparent; }}
 
 QLabel[role="display"] {{
-    font-family: "Bahnschrift", "Franklin Gothic Medium", "Segoe UI", sans-serif;
-    font-weight: 600;
+    font-family: "Literata", Georgia, serif;
+    font-weight: 400;
 }}
-
 QLabel[role="mono"], QPlainTextEdit[role="mono"] {{
-    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-family: "Geist Mono", "Cascadia Mono", monospace;
 }}
 
 QLabel[lane="direct"] {{ color: {lane_direct}; }}
 QLabel[lane="zapret"] {{ color: {lane_zapret}; }}
 QLabel[lane="dns"] {{ color: {lane_dns}; }}
 QLabel[lane="tg"] {{ color: {lane_tg}; }}
+QLabel[lane="vpn"] {{ color: {lane_vpn}; }}
+QLabel[lane="foreign"] {{ color: {lane_foreign}; }}
 
 /* ---------- Раскрывающийся раздел ---------- */
 
 QFrame#CollapsibleHeader {{
-    background: {surface};
+    background: {card};
     border: 1px solid {border};
     border-radius: 12px;
 }}
-QFrame#CollapsibleHeader:hover {{ border-color: {border_strong}; background: {surface_alt}; }}
-QLabel[lane="vpn"] {{ color: {lane_vpn}; }}
-QLabel[lane="foreign"] {{ color: {lane_foreign}; }}
-QLabel#PageSubtitle {{
-    font-size: 13px;
-    color: {text_dim};
-}}
-QLabel#SectionTitle {{
-    font-size: 14px;
-    font-weight: 620;
-    color: {text};
-}}
-QLabel#Muted {{ color: {text_dim}; }}
-QLabel#Faint {{ color: {text_faint}; font-size: 12px; }}
+QFrame#CollapsibleHeader:hover {{ border-color: {border_strong}; background: {card2}; }}
 
 /* ---------- Карточки ---------- */
 
 QFrame#Card {{
-    background: {surface};
+    background: {card};
     border: 1px solid {border};
-    border-radius: 14px;
+    border-radius: 16px;
 }}
 QFrame#CardAlt {{
-    background: {surface_alt};
+    background: {bg};
     border: 1px solid {border};
     border-radius: 12px;
+}}
+QFrame#Tile {{
+    background: {card};
+    border: 1px solid {border};
+    border-radius: 16px;
 }}
 QFrame#Divider {{
     background: {border};
@@ -423,172 +330,201 @@ QFrame#Divider {{
 /* ---------- Кнопки ---------- */
 
 QPushButton {{
-    background: {surface};
+    background: {card};
     border: 1px solid {border_strong};
-    border-radius: 9px;
-    padding: 8px 16px;
-    font-size: 13px;
+    border-radius: 8px;
+    padding: 8px 15px;
+    font-size: 13.5px;
     font-weight: 500;
     color: {text};
 }}
-QPushButton:hover {{ background: {hover}; }}
-QPushButton:pressed {{ background: {border}; }}
-QPushButton:disabled {{ color: {text_faint}; background: {surface_alt}; }}
+QPushButton:hover {{ background: {card2}; }}
+QPushButton:pressed {{ background: {plate}; }}
+QPushButton:disabled {{ color: {muted}; background: {card}; border-color: {border}; }}
 
 QPushButton[variant="primary"] {{
-    background: {accent};
-    border: 1px solid {accent};
-    color: {on_accent};
-    font-weight: 600;
+    background: {btn};
+    border: 1px solid {btn};
+    color: {on_btn};
 }}
-QPushButton[variant="primary"]:hover {{ background: {accent_hover}; border-color: {accent_hover}; }}
-QPushButton[variant="primary"]:pressed {{ background: {accent_press}; border-color: {accent_press}; }}
+QPushButton[variant="primary"]:hover {{ background: {btn_hover}; border-color: {btn_hover}; }}
+QPushButton[variant="primary"]:pressed {{ background: {ink2}; border-color: {ink2}; }}
 QPushButton[variant="primary"]:disabled {{
-    background: {border}; border-color: {border}; color: {text_faint};
+    background: {card2}; border-color: {border}; color: {muted};
 }}
 
 QPushButton[variant="soft"] {{
-    background: {accent_soft};
-    border: 1px solid {accent_border};
-    color: {accent_text};
-    font-weight: 600;
+    background: {card};
+    border: 1px solid {border_strong};
+    color: {text};
 }}
-QPushButton[variant="soft"]:hover {{ background: {accent_soft_hover}; }}
+QPushButton[variant="soft"]:hover {{ background: {card2}; }}
+
+QPushButton[variant="accent"] {{
+    background: {accent};
+    border: 1px solid {accent};
+    color: {on_accent};
+}}
+QPushButton[variant="accent"]:hover {{ background: {accent_hover}; border-color: {accent_hover}; }}
 
 QPushButton[variant="danger"] {{
-    background: {danger};
-    border: 1px solid {danger};
-    color: #FFFFFF;
-    font-weight: 600;
+    background: transparent;
+    border: 1px solid {bad};
+    color: {bad};
 }}
-QPushButton[variant="danger"]:hover {{ background: {danger}; }}
+QPushButton[variant="danger"]:hover {{ background: {danger_bg}; }}
 
 QPushButton[variant="ghost"] {{
     background: transparent;
     border: 1px solid transparent;
-    color: {text_dim};
+    color: {ink3};
 }}
-QPushButton[variant="ghost"]:hover {{ background: {hover}; color: {text}; }}
+QPushButton[variant="ghost"]:hover {{ background: {card}; color: {text}; }}
+QPushButton[variant="ghost"]:disabled {{ background: transparent; border-color: transparent; }}
+
+QPushButton[variant="link"] {{
+    background: transparent;
+    border: none;
+    padding: 2px 0px;
+    color: {accent_ink};
+}}
+QPushButton[variant="link"]:hover {{ color: {text}; }}
 
 QPushButton[sizeVariant="large"] {{
-    padding: 13px 26px;
+    padding: 11px 20px;
     font-size: 14px;
-    border-radius: 11px;
+    border-radius: 9px;
 }}
-
 QPushButton[sizeVariant="small"] {{
     padding: 4px 10px;
-    font-size: 12px;
+    font-size: 12.5px;
     border-radius: 7px;
 }}
 
 /* ---------- Поля ввода ---------- */
 
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{
-    background: {input};
+    background: {field};
     border: 1px solid {border_strong};
-    border-radius: 9px;
-    padding: 8px 11px;
-    selection-background-color: {accent};
-    selection-color: {on_accent};
+    border-radius: 8px;
+    padding: 7px 10px;
+    selection-background-color: {clay};
+    selection-color: #141413;
 }}
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus {{
     border-color: {accent};
 }}
-QLineEdit[invalid="true"] {{ border-color: {danger}; }}
-QPlainTextEdit, QTextEdit {{ font-family: "Cascadia Mono", "Consolas", monospace; }}
+QLineEdit[invalid="true"] {{ border-color: {bad}; }}
+QPlainTextEdit, QTextEdit {{ font-family: "Geist Mono", "Cascadia Mono", monospace; font-size: 12.5px; }}
+QLineEdit[secret="true"] {{ font-family: "Geist Mono", monospace; }}
 
 QComboBox {{
-    background: {input};
+    background: {field};
     border: 1px solid {border_strong};
-    border-radius: 9px;
-    padding: 7px 11px;
+    border-radius: 8px;
+    padding: 7px 30px 7px 10px;
     min-height: 18px;
 }}
-QComboBox:hover {{ border-color: {accent_border}; }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
+QComboBox:hover {{ border-color: {decor}; }}
+QComboBox:disabled {{ color: {muted}; }}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border: none;
+    width: 26px;
+}}
+QComboBox::down-arrow {{ image: url("{chevron}"); width: 12px; height: 12px; }}
 QComboBox QAbstractItemView {{
-    background: {surface};
+    background: {bg};
     border: 1px solid {border_strong};
     border-radius: 8px;
     padding: 4px;
-    selection-background-color: {accent_soft};
-    selection-color: {accent_text};
+    selection-background-color: {card2};
+    selection-color: {text};
     outline: none;
 }}
 
+QSpinBox::up-button, QSpinBox::down-button {{ width: 0px; border: none; }}
+
 /* ---------- Прочие контролы ---------- */
 
-QCheckBox, QRadioButton {{ spacing: 8px; color: {text}; }}
+QCheckBox, QRadioButton {{ spacing: 9px; color: {text}; background: transparent; }}
 QCheckBox::indicator, QRadioButton::indicator {{
-    width: 17px; height: 17px;
-    border: 1px solid {border_strong};
-    background: {input};
+    width: 16px; height: 16px;
+    border: 1.5px solid {ink3};
+    background: {field};
 }}
-QCheckBox::indicator {{ border-radius: 5px; }}
+QCheckBox::indicator {{ border-radius: 4px; }}
 QRadioButton::indicator {{ border-radius: 9px; }}
-QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
-    background: {accent};
-    border-color: {accent};
+QCheckBox::indicator:checked {{
+    background: {ink};
+    border-color: {ink};
+    image: url("{check}");
+}}
+QRadioButton::indicator:checked {{
+    background: {field};
+    border: 5px solid {ink};
 }}
 QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {accent}; }}
 
 QProgressBar {{
-    background: {border};
+    background: {card2};
     border: none;
-    border-radius: 5px;
-    height: 8px;
+    border-radius: 3px;
+    max-height: 6px;
     text-align: center;
     color: transparent;
 }}
-QProgressBar::chunk {{ background: {accent}; border-radius: 5px; }}
+QProgressBar::chunk {{ background: {clay}; border-radius: 3px; }}
 
 QScrollBar:vertical {{
-    background: transparent; width: 10px; margin: 2px;
+    background: transparent; width: 10px; margin: 3px 2px;
 }}
 QScrollBar::handle:vertical {{
-    background: {scroll}; border-radius: 5px; min-height: 30px;
+    background: {scroll}; border-radius: 3px; min-height: 30px; margin: 0px 2px;
 }}
-QScrollBar::handle:vertical:hover {{ background: {text_faint}; }}
-QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
-QScrollBar::handle:horizontal {{ background: {scroll}; border-radius: 5px; min-width: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: {decor}; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px 3px; }}
+QScrollBar::handle:horizontal {{ background: {scroll}; border-radius: 3px; min-width: 30px; margin: 2px 0px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0px; height: 0px; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
 QToolTip {{
-    background: {surface};
-    color: {text};
-    border: 1px solid {border_strong};
-    border-radius: 7px;
+    background: {ink};
+    color: {bg};
+    border: none;
+    border-radius: 6px;
     padding: 6px 9px;
+    font-size: 12.5px;
 }}
 
 /* Вкладки внутри раздела. */
 QFrame#SegmentBar {{
-    background: {surface};
+    background: {card};
     border: 1px solid {border};
-    border-radius: 11px;
+    border-radius: 10px;
 }}
 QPushButton#SegmentButton {{
     background: transparent;
-    border: none;
+    border: 1px solid transparent;
     border-radius: 8px;
-    padding: 7px 18px;
-    color: {text_dim};
-    font-weight: 600;
+    padding: 6px 14px;
+    color: {ink3};
+    font-weight: 500;
 }}
-QPushButton#SegmentButton:hover {{ background: {hover}; color: {text}; }}
-QPushButton#SegmentButton:checked {{ background: {accent_soft}; color: {accent_text}; }}
+QPushButton#SegmentButton:hover {{ color: {text}; }}
+QPushButton#SegmentButton:checked {{
+    background: {bg};
+    border: 1px solid {border_strong};
+    color: {text};
+}}
 
-/* Диалоги «Да/Нет». Текст у всех виджетов берётся из темы, а фон у
-   диалога по умолчанию системный, белый: в тёмной теме выходил белый
-   текст на белом. Фон задаём явно. */
 QDialog, QMessageBox {{
-    background: {surface};
+    background: {bg};
 }}
 QMessageBox QLabel {{
     color: {text};
-    font-size: 13px;
+    font-size: 13.5px;
     background: transparent;
 }}
 QMessageBox QPushButton {{
@@ -596,41 +532,102 @@ QMessageBox QPushButton {{
 }}
 
 QMenu {{
-    background: {surface};
+    background: {bg};
     border: 1px solid {border_strong};
-    border-radius: 9px;
+    border-radius: 10px;
     padding: 5px;
 }}
-QMenu::item {{ padding: 7px 22px 7px 14px; border-radius: 6px; }}
-QMenu::item:selected {{ background: {accent_soft}; color: {accent_text}; }}
+QMenu::item {{ padding: 7px 22px 7px 12px; border-radius: 6px; background: transparent; }}
+QMenu::item:selected {{ background: {card}; color: {text}; }}
+QMenu::item:disabled {{ color: {muted}; }}
 QMenu::separator {{ height: 1px; background: {border}; margin: 4px 8px; }}
 
 QSplitter::handle {{ background: {border}; }}
 
-/* ---------- Значки состояния ---------- */
+QTableWidget, QTreeWidget, QListWidget {{
+    background: {bg};
+    border: 1px solid {border};
+    border-radius: 10px;
+    gridline-color: {border};
+    selection-background-color: {card2};
+    selection-color: {text};
+    outline: none;
+}}
+QHeaderView::section {{
+    background: {card};
+    color: {ink3};
+    border: none;
+    border-bottom: 1px solid {border};
+    padding: 6px 8px;
+    font-family: "Geist Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+}}
 
-QLabel[badge="ok"] {{
-    background: {success_bg}; color: {success};
-    border-radius: 7px; padding: 3px 9px; font-size: 12px; font-weight: 600;
+/* ---------- Значки состояния: как штамп на бланке ---------- */
+
+QLabel[badge] {{
+    font-family: "Geist Mono", monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    border-radius: 6px;
+    padding: 3px 8px;
 }}
-QLabel[badge="warn"] {{
-    background: {warning_bg}; color: {warning};
-    border-radius: 7px; padding: 3px 9px; font-size: 12px; font-weight: 600;
-}}
-QLabel[badge="error"] {{
-    background: {danger_bg}; color: {danger};
-    border-radius: 7px; padding: 3px 9px; font-size: 12px; font-weight: 600;
-}}
-QLabel[badge="accent"] {{
-    background: {accent_soft}; color: {accent_text};
-    border-radius: 7px; padding: 3px 9px; font-size: 12px; font-weight: 600;
-}}
-QLabel[badge="neutral"] {{
-    background: {hover}; color: {text_dim};
-    border-radius: 7px; padding: 3px 9px; font-size: 12px; font-weight: 600;
-}}
+QLabel[badge="ok"] {{ background: {success_bg}; color: {ok}; }}
+QLabel[badge="warn"] {{ background: {warning_bg}; color: {warn}; }}
+QLabel[badge="error"] {{ background: {danger_bg}; color: {bad}; }}
+QLabel[badge="accent"] {{ background: {accent_soft}; color: {accent_ink}; }}
+QLabel[badge="neutral"] {{ background: {card2}; color: {ink3}; }}
 """
 
 
+def _asset(name: str, draw) -> str:
+    """Маленькая картинка для стиля (стрелка списка, галочка) — PNG в кэше.
+
+    PNG, а не SVG: SVG в стилях Qt читает отдельный плагин, и если его нет,
+    стрелки просто пропадают.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage, QPainter
+
+    from app.core import paths
+
+    folder = paths.cache_dir() / "ui"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / name
+    if not target.exists():
+        image = QImage(48, 48, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.scale(4, 4)
+        draw(painter)
+        painter.end()
+        if not image.save(str(target)):
+            return ""
+    return target.as_posix()
+
+
+def _stroke_asset(name: str, color: str, points, width: float) -> str:
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QColor, QPen, QPolygonF
+
+    def draw(painter) -> None:
+        pen = QPen(QColor(color))
+        pen.setWidthF(width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.drawPolyline(QPolygonF([QPointF(x, y) for x, y in points]))
+
+    return _asset(name, draw)
+
+
 def build_qss(tokens: dict[str, str]) -> str:
-    return QSS_TEMPLATE.format(**tokens)
+    ink3 = tokens["ink3"].lstrip("#")
+    bg = tokens["bg"].lstrip("#")
+    chevron = _stroke_asset(f"chevron-{ink3}.png", tokens["ink3"],
+                            ((3.0, 4.6), (6.0, 7.8), (9.0, 4.6)), 1.4)
+    check = _stroke_asset(f"check-{bg}.png", tokens["bg"],
+                          ((2.6, 6.4), (5.0, 8.8), (9.6, 3.4)), 1.6)
+    return QSS_TEMPLATE.format(chevron=chevron, check=check, **tokens)

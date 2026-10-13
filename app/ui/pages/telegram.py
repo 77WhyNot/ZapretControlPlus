@@ -32,14 +32,25 @@ class TelegramPage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "Telegram",
+            "Голубиная *почта*",
             "Если Telegram не подключается — включите первый способ и нажмите "
             "«Открыть в Telegram». Второй добавляйте, если первого мало.",
             parent,
+            eyebrow="Telegram · два способа",
         )
         self._ws_worker: Worker | None = None
         self._tg_worker: Worker | None = None
         self._busy_ws = False
+
+        from app.ui import scenes
+        from app.ui.ink import InkCanvas
+
+        # Голубятня на этом компьютере, дом Telegram — вдали. Включили прокси —
+        # голубь носит письма туда и обратно.
+        self.scene = InkCanvas(scenes.dovecote(), context, plate="plate", radius=20,
+                               max_height=180, fit="slice")
+        self.scene.setMinimumHeight(120)
+        self.body.addWidget(self.scene)
 
         self._build_websocket()
         self._build_zapret()
@@ -56,7 +67,6 @@ class TelegramPage(Page):
         header = QHBoxLayout()
         header.setSpacing(10)
         self.ws_icon = IconLabel("telegram", self.context.color("accent"), 20)
-        header.addWidget(self.ws_icon)
         header.addWidget(section_label("Через WebSocket-прокси"))
         header.addWidget(Badge("рекомендуется", "accent"))
         header.addStretch(1)
@@ -82,8 +92,7 @@ class TelegramPage(Page):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
-        self.btn_open = Button("Открыть в Telegram", variant="primary",
-                               icon_name="external", icon_color="#FFFFFF")
+        self.btn_open = Button("Открыть в Telegram  →", variant="primary")
         self.btn_open.clicked.connect(lambda: tgws_actions.open_in_telegram(self.context))
         buttons.addWidget(self.btn_open)
         self.btn_copy = Button("Скопировать ссылку", variant="ghost")
@@ -145,6 +154,8 @@ class TelegramPage(Page):
 
     def _sync_ws(self) -> None:
         status = self.context.tgws_status
+        self.scene.set_state("on", bool(status.running))
+        self.scene.set_text("port", f"127.0.0.1:{status.port or tgws.tgws_engine.port()}")
         self.switch_ws.blockSignals(True)
         self.switch_ws.setChecked(status.running, animate=False)
         self.switch_ws.blockSignals(False)
@@ -174,7 +185,6 @@ class TelegramPage(Page):
         header = QHBoxLayout()
         header.setSpacing(10)
         self.tg_icon = IconLabel("shield", self.context.color("accent"), 20)
-        header.addWidget(self.tg_icon)
         header.addWidget(section_label("Через zapret"))
         header.addStretch(1)
         self.tg_badge = Badge("выключен", "neutral")
@@ -275,9 +285,3 @@ class TelegramPage(Page):
         self.ws_spinner.set_color(accent)
         self.tg_spinner.set_color(accent)
         self.ws_more.apply_theme()
-        for switch in (self.switch_ws, self.switch_tg):
-            switch.set_colors(
-                self.context.color("lane_tg"),
-                self.context.color("border_strong"),
-                self.context.color("surface"),
-            )

@@ -5,8 +5,9 @@ from __future__ import annotations
 from PySide6.QtCore import QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter
 from PySide6.QtWidgets import (
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QProgressBar,
     QPushButton,
@@ -23,148 +24,73 @@ from app.ui import vpn_actions
 from app.ui.context import AppContext
 from app.ui.pages.base import Banner, Page
 from app.ui.widgets import (
+    MonoLabel,
+    StatusChip,
     IconLabel,
     clear_layout,
-    Badge,
     Button,
     Card,
-    Divider,
     Spinner,
     Switch,
     Worker,
     faint_label,
-    muted_label,
     section_label,
 )
 
-COLUMNS = (
-    ("Направление", 3),
-    ("Задержка", 1),
-    ("Качество", 1),
-    ("Протокол", 2),
-    ("Статус", 1),
+# Очертания островов на табло: у каждого берега свой (из макета).
+ISLANDS = (
+    "M6 16 C 8 9, 18 7, 26 10 C 34 12, 38 15, 34 18 Z",
+    "M8 17 C 10 8, 22 5, 30 9 C 38 12, 38 17, 30 18 Z",
+    "M12 17 C 12 7, 20 3, 26 6 C 32 9, 34 15, 28 18 Z",
+    "M5 17 C 9 11, 15 10, 20 12 C 26 8, 36 10, 38 17 Z",
+    "M14 18 C 10 12, 18 6, 24 7 C 30 8, 32 14, 26 18 Z",
 )
+WAVE = "q4 -5 8 0 q4 5 8 0"
 
 
-class SignalBars(QWidget):
-    """Четыре столбика: чем меньше задержка, тем их больше."""
-
-    def __init__(self, context: AppContext, latency: int = -1,
-                 parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.context = context
-        self.latency = latency
-        self.setFixedSize(30, 16)
-
-    def set_latency(self, latency: int) -> None:
-        self.latency = latency
-        self.update()
-
-    def _filled(self) -> int:
-        if self.latency < 0:
-            return 0
-        if self.latency <= 60:
-            return 4
-        if self.latency <= 110:
-            return 3
-        if self.latency <= 200:
-            return 2
-        return 1
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(Qt.PenStyle.NoPen)
-
-        filled = self._filled()
-        colors = {
-            "good": self.context.color("success"),
-            "fair": self.context.color("warning"),
-            "poor": self.context.color("danger"),
-            "dead": self.context.color("text_faint"),
-        }
-        active = QColor(colors[probe.quality(self.latency)])
-        idle = QColor(self.context.color("border_strong"))
-
-        for index in range(4):
-            height = 5 + index * 3
-            painter.setBrush(active if index < filled else idle)
-            painter.drawRoundedRect(index * 8, 16 - height, 5, height, 1.5, 1.5)
-        painter.end()
+def wave_count(latency: int) -> int:
+    """Сколько волн из четырёх «спокойны»: чем меньше задержка, тем больше."""
+    if latency < 0:
+        return 0
+    if latency <= 60:
+        return 4
+    if latency <= 110:
+        return 3
+    if latency <= 200:
+        return 2
+    return 1
 
 
 class ServerRow(QWidget):
-    """Строка табло."""
+    """Строка «Табло берегов»: остров, страна, задержка, волнение, протокол."""
 
     chosen = Signal(str)
 
     def __init__(self, context: AppContext, server: Server, latency: int,
-                 active: bool, parent: QWidget | None = None) -> None:
+                 active: bool, index: int = 0, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        from app.ui.ink import parse_path
+
         self.context = context
         self.server = server
         self.latency = latency
         self.active = active
         self._hover = False
+        self._island = parse_path(ISLANDS[index % len(ISLANDS)])
+        self._waves = parse_path("M2 20 q4 -3 8 0 q4 3 8 0 M26 21 q4 -3 8 0 q4 3 8 0")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(12)
-
-        self.name = QLabel(server.name)
-        self.name.setStyleSheet("font-weight: 600;")
-        layout.addWidget(self.name, COLUMNS[0][1])
-
-        self.delay = QLabel(self._delay_text())
-        self.delay.setProperty("role", "mono")
-        layout.addWidget(self.delay, COLUMNS[1][1])
-
-        self.bars = SignalBars(context, latency)
-        bars_box = QHBoxLayout()
-        bars_box.setContentsMargins(0, 0, 0, 0)
-        bars_box.addWidget(self.bars)
-        bars_box.addStretch(1)
-        container = QWidget(self)
-        container.setLayout(bars_box)
-        layout.addWidget(container, COLUMNS[2][1])
-
-        self.protocol = faint_label(server.transport_label, wrap=False)
-        layout.addWidget(self.protocol, COLUMNS[3][1])
-
-        self.status = Badge("в работе" if active else "готов",
-                            "accent" if active else "neutral", self)
-        layout.addWidget(self.status, COLUMNS[4][1])
-
-        self.apply_theme()
-
-    def _delay_text(self) -> str:
-        return f"{self.latency} мс" if self.latency >= 0 else "— мс"
+        self.setFixedHeight(44)
+        self.setToolTip(f"{server.name} · {server.endpoint}")
 
     def set_latency(self, latency: int) -> None:
         self.latency = latency
-        self.delay.setText(self._delay_text())
-        self.bars.set_latency(latency)
-        self.apply_theme()
+        self.update()
 
     def set_active(self, active: bool) -> None:
         self.active = active
-        self.status.update_state("в работе" if active else "готов",
-                                 "accent" if active else "neutral")
-        self.apply_theme()
+        self.update()
 
     def apply_theme(self) -> None:
-        colors = {
-            "good": self.context.color("success"),
-            "fair": self.context.color("warning"),
-            "poor": self.context.color("danger"),
-            "dead": self.context.color("text_faint"),
-        }
-        self.delay.setStyleSheet(
-            f"color: {colors[probe.quality(self.latency)]}; font-weight: 600;"
-        )
-        # Подсветку строки рисуем сами. Раньше она задавалась стилем без
-        # селектора, и Qt раздавал фон с полоской каждой ячейке по отдельности.
         self.update()
 
     def enterEvent(self, event) -> None:  # noqa: N802
@@ -177,28 +103,128 @@ class ServerRow(QWidget):
         self.update()
         super().leaveEvent(event)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        hover = getattr(self, "_hover", False)
-        if not self.active and not hover:
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(Qt.PenStyle.NoPen)
-        rect = QRectF(self.rect()).adjusted(0, 2, 0, -2)
-        painter.setBrush(QColor(self.context.color(
-            "lane_vpn_soft" if self.active else "hover"
-        )))
-        painter.drawRoundedRect(rect, 8, 8)
-        if self.active:
-            painter.setBrush(QColor(self.context.color("lane_vpn")))
-            painter.drawRoundedRect(QRectF(rect.x() + 1, rect.y() + 7, 3, rect.height() - 14),
-                                    1.5, 1.5)
-        painter.end()
-
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
             self.chosen.emit(self.server.name)
         super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QPen
+
+        from app.ui import fonts
+        from app.ui.ink import parse_path
+        from app.ui.naming import server_code, server_place
+
+        c = self.context
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0, 1, 0, -1)
+        if self.active or self._hover:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(c.color("bg" if self.active else "card2")))
+            painter.drawRoundedRect(rect, 10, 10)
+            if self.active:
+                pen = QPen(QColor(c.color("border_strong")))
+                pen.setWidthF(1.0)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+
+        width = self.width()
+        compact = width < 720
+        x = 10.0
+        cy = rect.center().y()
+        # Остров.
+        painter.save()
+        painter.translate(x, cy - 12)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(c.color("kraft" if self.active else "pencil")))
+        painter.drawPath(self._island)
+        pen = QPen(QColor(c.color("decor")))
+        pen.setWidthF(1.2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(self._waves)
+        painter.restore()
+        x += 46 + 14
+
+        # Код и название.
+        right_cols = (124 + 90 + (0 if compact else 130) + 118 + 14 * 3)
+        name_w = max(80.0, width - x - right_cols - 10)
+        painter.setFont(fonts.mono(10.5, 500, 0.1))
+        painter.setPen(QColor(c.color("muted")))
+        code = server_code(self.server.name)
+        metrics = painter.fontMetrics()
+        painter.drawText(QPointF(x, cy + metrics.ascent() / 2 - 1), code)
+        code_w = metrics.horizontalAdvance(code) + 8
+        painter.setFont(fonts.serif(17, 400))
+        painter.setPen(QColor(c.color("ink")))
+        metrics = painter.fontMetrics()
+        place = metrics.elidedText(server_place(self.server.name), Qt.TextElideMode.ElideRight,
+                                   int(name_w - code_w))
+        painter.drawText(QPointF(x + code_w, cy + metrics.ascent() / 2 - 2), place)
+        x += name_w + 14
+
+        # Задержка: полоска и миллисекунды.
+        if self.latency >= 0:
+            bar = max(6.0, 64.0 - self.latency / 4.0)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(c.color("sky")))
+            painter.drawRoundedRect(QRectF(x, cy - 1.5, bar, 3), 1.5, 1.5)
+            text = f"{self.latency} мс"
+            tx = x + bar + 8
+        else:
+            text = "— мс"
+            tx = x
+        painter.setFont(fonts.mono(12, 500, 0.0))
+        painter.setPen(QColor(c.color("ink2")))
+        metrics = painter.fontMetrics()
+        painter.drawText(QPointF(tx, cy + metrics.ascent() / 2 - 1), text)
+        x += 124 + 14
+
+        # Волнение: четыре волны, спокойные — оливковые.
+        calm = wave_count(self.latency)
+        for k in range(4):
+            path = parse_path(f"M{x + 2 + k * 20} {cy} {WAVE}")
+            pen = QPen(QColor(c.color("olive" if k < calm else "pencil")))
+            pen.setWidthF(1.6)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawPath(path)
+        x += 90 + 14
+
+        if not compact:
+            painter.setFont(fonts.mono(10.5, 500, 0.08))
+            painter.setPen(QColor(c.color("ink3")))
+            metrics = painter.fontMetrics()
+            proto = metrics.elidedText(self.server.transport_label.upper(),
+                                       Qt.TextElideMode.ElideRight, 130)
+            painter.drawText(QPointF(x, cy + metrics.ascent() / 2 - 1), proto)
+            x += 130 + 14
+
+        # «В пути» или «Плыть сюда →».
+        if self.active:
+            painter.setFont(fonts.mono(10, 500, 0.1))
+            metrics = painter.fontMetrics()
+            label = "В ПУТИ"
+            w = metrics.horizontalAdvance(label) + 16
+            chip = QRectF(x, cy - 11, w, 22)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(c.color("clay")))
+            painter.drawRoundedRect(chip, 6, 6)
+            painter.setPen(QColor("#141413"))
+            painter.drawText(chip, int(Qt.AlignmentFlag.AlignCenter), label)
+        else:
+            painter.setFont(fonts.sans(13, 400))
+            painter.setPen(QColor(c.color("ink" if self._hover else "ink3")))
+            metrics = painter.fontMetrics()
+            shift = 3 if self._hover else 0
+            painter.drawText(QPointF(x, cy + metrics.ascent() / 2 - 1), "Плыть сюда")
+            painter.drawText(QPointF(x + metrics.horizontalAdvance("Плыть сюда ") + shift,
+                                     cy + metrics.ascent() / 2 - 1), "→")
+        painter.end()
 
 
 class VpnPage(Page):
@@ -206,10 +232,11 @@ class VpnPage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "VPN",
+            "Дальние *берега*",
             "Ваша подписка, выбор сервера и способ подключения. Ссылка хранится "
             "только на этом компьютере и никуда не отправляется.",
             parent,
+            eyebrow="VPN · ваша подписка",
         )
         self._servers: list[Server] = []
         self._info = subscription.SubscriptionInfo()
@@ -219,30 +246,90 @@ class VpnPage(Page):
         self._vpn_worker: Worker | None = None
         self._check_worker: Worker | None = None
 
+        self._build_map()
+        cards = QGridLayout()
+        cards.setHorizontalSpacing(14)
+        cards.setVerticalSpacing(14)
+        self._cards_grid = cards
+        self._cards_columns = 0
+        self.body.addLayout(cards)
         self._build_control()
         self._build_subscription()
-        self._build_shop()
+        self._fit_cards()
         self._build_board()
+        self._build_shop()
 
         context.vpn_status_changed.connect(lambda _: self._sync_control())
         context.tunnels_changed.connect(lambda _: self._sync_control())
         self.apply_theme()
         self._load_cached()
 
+    # --- карта: из сада морем ---------------------------------------------
+
+    def _build_map(self) -> None:
+        from app.ui import scenes
+        from app.ui.ink import InkCanvas
+
+        self.map = InkCanvas(scenes.sea_map(), self.context, plate="plate", radius=20,
+                             max_height=190, fit="slice")
+        self.map.setMinimumHeight(120)
+        self.body.addWidget(self.map)
+
+    def _sync_map(self) -> None:
+        from app.ui.naming import server_code, server_place
+
+        status = self.context.vpn_status
+        name = status.server if status.running and status.server else \
+            self.context.selected_server()
+        if not self._servers:
+            self.map.set_text("name", "берег не выбран")
+            self.map.set_text("sub", "НУЖНА ПОДПИСКА")
+        else:
+            latency = self._latency.get(name, -1)
+            self.map.set_text("name", server_place(name) if name else "берег не выбран")
+            self.map.set_text("sub", server_code(name) + (f" · {latency} МС" if latency >= 0 else ""))
+        others = [server for server in self._servers if server.name != name][:2]
+        self.map.set_text("alt1", server_code(others[0].name) if others else "")
+        self.map.set_text("alt2", server_code(others[1].name) if len(others) > 1 else "")
+        self.map.set_state("on", bool(status.running))
+        # Лодка плывёт быстрее, если до берега близко.
+        latency = self._latency.get(name, -1)
+        period = 6.0 + (latency / 30.0 if latency > 0 else 3.0)
+        self.map.scene.motion_period["boat"] = min(period, 16.0)
+
+    def _fit_cards(self) -> None:
+        """«Как плыть» и «Подписка» — рядом, а в узком окне одна под другой."""
+        columns = 2 if self.width() >= 980 else 1
+        if columns == self._cards_columns:
+            return
+        self._cards_columns = columns
+        for index, card in enumerate((self.control_card, self.sub_card)):
+            self._cards_grid.removeWidget(card)
+            self._cards_grid.addWidget(card, 0 if columns == 2 else index,
+                                       index if columns == 2 else 0)
+        self._cards_grid.setColumnStretch(1, 1 if columns == 2 else 0)
+        self._cards_grid.setColumnStretch(0, 1)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "sub_card"):
+            self._fit_cards()
+
     # --- выключатель и способ ---------------------------------------------
 
     def _build_control(self) -> None:
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=18, spacing=10)
+        self.control_card = card
 
         header = QHBoxLayout()
         header.setSpacing(10)
-        self.vpn_icon = IconLabel("layers", self.context.color("lane_vpn"), 20)
-        header.addWidget(self.vpn_icon)
-        header.addWidget(section_label("VPN"))
-        header.addStretch(1)
-        self.vpn_badge = Badge("выключен", "neutral")
-        header.addWidget(self.vpn_badge)
-        self.vpn_spinner = Spinner(16, self.context.color("lane_vpn"))
+        titles = QVBoxLayout()
+        titles.setSpacing(4)
+        titles.addWidget(section_label("Как плыть"))
+        self.vpn_badge = StatusChip("выключен", self.context, False)
+        titles.addWidget(self.vpn_badge)
+        header.addLayout(titles, 1)
+        self.vpn_spinner = Spinner(16, self.context.color("accent"))
         header.addWidget(self.vpn_spinner)
         self.switch_vpn = Switch(False)
         self.switch_vpn.toggled.connect(self._toggle_vpn)
@@ -262,41 +349,40 @@ class VpnPage(Page):
         card.add(self.banner_foreign)
         self.banner_foreign.setVisible(False)
 
-        card.add(Divider())
-        card.add(muted_label("Как подключаться"))
-
         row = QHBoxLayout()
-        row.setSpacing(8)
+        row.setSpacing(12)
+        bar = QFrame()
+        bar.setObjectName("SegmentBar")
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(3, 3, 3, 3)
+        bar_layout.setSpacing(2)
         self._transport_buttons: dict[str, QPushButton] = {}
         for key, title in (
             (vpn_config.TRANSPORT_TUN, "Туннель"),
             (vpn_config.TRANSPORT_PROXY, "Прокси"),
         ):
-            button = QPushButton(title)
+            button = QPushButton(title, bar)
+            button.setObjectName("SegmentButton")
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _=False, k=key: self._set_transport(k))
-            row.addWidget(button)
+            bar_layout.addWidget(button)
             self._transport_buttons[key] = button
+        row.addWidget(bar)
+        self.btn_check = Button("Проверить VPN", variant="ghost")
+        self.btn_check.clicked.connect(self._check_exit)
+        row.addWidget(self.btn_check)
+        self.check_spinner = Spinner(16, self.context.color("accent"))
+        row.addWidget(self.check_spinner)
         row.addStretch(1)
-        # Список программ — соседняя вкладка «Программы» этого же раздела.
         card.add_layout(row)
 
         self.transport_hint = faint_label("")
         card.add(self.transport_hint)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
-        self.check_spinner = Spinner(16, self.context.color("lane_vpn"))
-        actions.addWidget(self.check_spinner)
-        self.btn_check = Button("Проверить VPN", variant="soft")
-        self.btn_check.clicked.connect(self._check_exit)
-        actions.addWidget(self.btn_check)
         self.check_result = faint_label("", wrap=True)
-        actions.addWidget(self.check_result, 1)
-        card.add_layout(actions)
+        card.add(self.check_result)
+        self.check_result.setVisible(False)
 
-        self.body.addWidget(card)
         self._sync_transport()
         self._sync_control()
 
@@ -315,24 +401,19 @@ class VpnPage(Page):
     def _sync_transport(self) -> None:
         current = vpn_actions.transport()
         for key, button in self._transport_buttons.items():
-            selected = key == current
-            button.setChecked(selected)
-            button.setProperty("variant", "soft" if selected else "ghost")
-            style = button.style()
-            style.unpolish(button)
-            style.polish(button)
+            button.setChecked(key == current)
         if current == vpn_config.TRANSPORT_TUN:
             self.transport_hint.setText(
-                "Туннель: программа создаёт сетевой адаптер и сама решает, кому "
-                "идти через VPN, а кому напрямую (там подхватывает zapret). Не "
-                "уживается с другим VPN-клиентом — пока работает Happ или "
+                "Своя лодка: программа создаёт сетевой адаптер и сама решает, кому "
+                "плыть через VPN, а кому идти напрямую (там подхватывает zapret). "
+                "С другим VPN-клиентом не уживается — пока работает Happ или "
                 "подобный, включиться не сможет."
             )
         else:
             self.transport_hint.setText(
-                "Прокси: без адаптера и без изменения маршрутов — работает рядом "
-                "с любым другим VPN. Через VPN пойдут браузеры, Discord и всё, "
-                "что уважает системный прокси. Выбор программ здесь не действует."
+                "Попутный корабль: без адаптера и без смены маршрутов — уживается "
+                "с любым другим VPN. Через VPN пойдут браузеры, Discord и всё, что "
+                "уважает системный прокси. Выбор программ здесь не действует."
             )
 
     def _toggle_vpn(self, value: bool) -> None:
@@ -368,18 +449,20 @@ class VpnPage(Page):
 
         if status.running:
             label = "туннель" if status.transport == vpn_config.TRANSPORT_TUN else "прокси"
-            self.vpn_badge.update_state("работает", "ok")
+            mode = vpn_config.MODE_LABELS.get(status.mode, "").lower()
+            self.vpn_badge.set_state(f"в пути · {label}", True)
             self.vpn_status.setText(
-                f"Работает ({label}) · сервер «{status.server or '—'}» · "
-                f"{vpn_config.MODE_LABELS.get(status.mode, '')}"
+                f"Плывём через «{status.server or '—'}»"
+                + (f" · {mode}" if mode and status.transport == vpn_config.TRANSPORT_TUN else "")
             )
         else:
-            self.vpn_badge.update_state("выключен", "neutral")
+            self.vpn_badge.set_state("у причала" if self._servers else "нужна подписка", False)
             self.vpn_status.setText(
-                "Выключен. Выберите сервер ниже и включите переключатель справа."
+                "Выберите берег на табло ниже и включите тумблер."
                 if self._servers else
-                "Сначала добавьте подписку ниже."
+                "Сначала добавьте подписку — справа или ниже."
             )
+        self._sync_map()
 
         blocked = bool(tunnels) and vpn_actions.transport() == vpn_config.TRANSPORT_TUN
         if blocked and not status.running:
@@ -398,11 +481,13 @@ class VpnPage(Page):
         self.btn_check.setEnabled(False)
         self.check_spinner.start()
         self.check_result.setText("Спрашиваем, каким адресом нас видят…")
+        self.check_result.setVisible(True)
 
         def done(ok: bool, message: str) -> None:
             self.btn_check.setEnabled(True)
             self.check_spinner.stop()
             self.check_result.setText(message)
+            self.check_result.setVisible(bool(message))
 
         self._check_worker = vpn_actions.check_exit(self, self.context, done)
         if self._check_worker is None:
@@ -411,13 +496,14 @@ class VpnPage(Page):
     # --- подписка --------------------------------------------------------
 
     def _build_subscription(self) -> None:
-        card = Card(padding=20, spacing=14)
+        card = Card(padding=18, spacing=10)
+        self.sub_card = card
 
         header = QHBoxLayout()
         header.setSpacing(10)
         header.addWidget(section_label("Подписка"))
         header.addStretch(1)
-        self.sub_badge = Badge("не настроена", "neutral")
+        self.sub_badge = StatusChip("не настроена", self.context, False)
         header.addWidget(self.sub_badge)
         card.add_layout(header)
 
@@ -428,6 +514,7 @@ class VpnPage(Page):
             "https://… — ссылка-подписка, либо ключ vless:// целиком"
         )
         self.url_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.url_input.setProperty("secret", True)
         row.addWidget(self.url_input, 1)
 
         self.btn_show = Button("Показать", variant="ghost")
@@ -451,8 +538,6 @@ class VpnPage(Page):
             "Вставьте ссылку из личного кабинета и нажмите «Обновить»."
         )
         card.add(self.sub_details)
-
-        self.body.addWidget(card)
 
     def _toggle_url_visibility(self) -> None:
         visible = self.btn_show.isChecked()
@@ -480,7 +565,7 @@ class VpnPage(Page):
     def _subscription_failed(self, message: str) -> None:
         self.btn_update.setEnabled(True)
         self.sub_spinner.stop()
-        self.sub_badge.update_state("ошибка", "error")
+        self.sub_badge.set_state("ошибка", False, "error")
         self.sub_details.setText(message)
         self.context.error(message)
 
@@ -509,20 +594,20 @@ class VpnPage(Page):
     def _render_subscription(self) -> None:
         info = self._info
         if not self._servers:
-            self.sub_badge.update_state("не настроена", "neutral")
+            self.sub_badge.set_state("не настроена", False)
             return
 
         days = info.days_left
         if days is None:
-            self.sub_badge.update_state("активна", "ok")
+            self.sub_badge.set_state("активна", True)
         elif days <= 3:
-            self.sub_badge.update_state(f"осталось {days} дн.", "error")
+            self.sub_badge.set_state(f"осталось {days} дн.", True, "error")
         elif days <= 10:
-            self.sub_badge.update_state(f"осталось {days} дн.", "warn")
+            self.sub_badge.set_state(f"осталось {days} дн.", True, "warn")
         else:
-            self.sub_badge.update_state("активна", "ok")
+            self.sub_badge.set_state("активна", True)
 
-        parts = [f"Серверов: {len(self._servers)}"]
+        parts = [f"Берегов: {len(self._servers)}"]
         if info.title:
             parts.insert(0, info.title)
         if info.has_quota:
@@ -572,15 +657,19 @@ class VpnPage(Page):
         has_subscription = bool(self._servers)
         self.shop_text.setVisible(not has_subscription)
         self.shop_icon.setVisible(not has_subscription)
+        self.shop_card.setVisible(not has_subscription)
 
     # --- табло -----------------------------------------------------------
 
     def _build_board(self) -> None:
-        card = Card(padding=18, spacing=10)
+        card = Card(padding=14, spacing=6)
 
         header = QHBoxLayout()
-        header.setSpacing(10)
-        header.addWidget(section_label("Табло серверов"))
+        header.setContentsMargins(6, 0, 6, 0)
+        header.setSpacing(12)
+        header.addWidget(section_label("Табло берегов"))
+        header.addWidget(MonoLabel("задержка · волнение · протокол", self.context, "ink3"),
+                         0, Qt.AlignmentFlag.AlignVCenter)
         header.addStretch(1)
         self.board_spinner = Spinner(16, self.context.color("accent"))
         header.addWidget(self.board_spinner)
@@ -589,33 +678,21 @@ class VpnPage(Page):
         self.btn_best.clicked.connect(self._choose_best)
         header.addWidget(self.btn_best)
 
-        self.btn_measure = Button("Проверить задержку")
+        self.btn_measure = Button("Проверить задержку", variant="ghost")
         self.btn_measure.clicked.connect(self.measure_all)
         header.addWidget(self.btn_measure)
         card.add_layout(header)
 
-        head = QHBoxLayout()
-        head.setContentsMargins(12, 0, 12, 0)
-        head.setSpacing(12)
-        for title, stretch in COLUMNS:
-            label = QLabel(title.upper())
-            label.setStyleSheet(
-                f"color: {self.context.color('text_faint')}; font-size: 10.5px; "
-                "letter-spacing: 1.4px; font-weight: 600;"
-            )
-            head.addWidget(label, stretch)
-        card.add_layout(head)
-        card.add(Divider())
-
         self.rows_host = QWidget()
         self.rows_layout = QVBoxLayout(self.rows_host)
         self.rows_layout.setContentsMargins(0, 0, 0, 0)
-        self.rows_layout.setSpacing(0)
+        self.rows_layout.setSpacing(1)
         card.add(self.rows_host)
 
         self.board_empty = faint_label(
-            "Серверов пока нет. Добавьте ссылку-подписку выше."
+            "Берегов пока нет. Добавьте ссылку-подписку выше — и табло заполнится."
         )
+        self.board_empty.setContentsMargins(6, 4, 6, 6)
         card.add(self.board_empty)
 
         self.body.addWidget(card)
@@ -626,12 +703,10 @@ class VpnPage(Page):
 
         active = self.context.selected_server()
         for index, server in enumerate(self._servers):
-            if index:
-                self.rows_layout.addWidget(Divider(self.rows_host))
             row = ServerRow(
                 self.context, server,
                 self._latency.get(server.name, -1),
-                server.name == active,
+                server.name == active, index,
                 self.rows_host,
             )
             row.chosen.connect(self._select_server)
@@ -640,6 +715,7 @@ class VpnPage(Page):
 
         self.board_empty.setVisible(not self._rows)
         self.rows_host.setVisible(bool(self._rows))
+        self._sync_map()
 
     def _select_server(self, name: str) -> None:
         config.set("vpn_selected_server", name)
@@ -703,14 +779,15 @@ class VpnPage(Page):
         self._latency = dict(result)
         for row in self._rows:
             row.set_latency(self._latency.get(row.server.name, -1))
+        self._sync_map()
 
         alive = [value for value in self._latency.values() if value >= 0]
         if not alive:
             self.context.warn(
-                "Ни один сервер не ответил. Проверьте интернет или обновите подписку."
+                "Ни один берег не ответил. Проверьте интернет или обновите подписку."
             )
         else:
-            self.context.ok(f"Ответили серверов: {len(alive)} из {len(self._latency)}")
+            self.context.ok(f"Ответили берегов: {len(alive)} из {len(self._latency)}")
 
     def _choose_best(self) -> None:
         alive = {name: value for name, value in self._latency.items() if value >= 0}
@@ -735,15 +812,9 @@ class VpnPage(Page):
 
     def apply_theme(self) -> None:
         accent = self.context.color("accent")
-        lane = self.context.color("lane_vpn")
-        self.vpn_icon.set_color(lane)
-        self.vpn_spinner.set_color(lane)
-        self.check_spinner.set_color(lane)
-        self.switch_vpn.set_colors(
-            lane, self.context.color("border_strong"), self.context.color("surface")
-        )
-        self.sub_spinner.set_color(accent)
-        self.board_spinner.set_color(accent)
+        for spinner in (self.vpn_spinner, self.check_spinner, self.sub_spinner,
+                        self.board_spinner):
+            spinner.set_color(accent)
         self.shop_icon.set_color(accent)
         for row in self._rows:
             row.apply_theme()

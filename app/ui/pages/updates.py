@@ -32,10 +32,11 @@ class UpdatesPage(Page):
                  parent: QWidget | None = None) -> None:
         super().__init__(
             context,
-            "Обновления",
+            "Свежие *семена*",
             "Стратегии обхода живут недолго: провайдеры подстраиваются, и "
             "авторы zapret выпускают новые версии. Держите ядро свежим.",
             parent,
+            eyebrow="Настройки · обновления",
         )
         self._core_info: updater.UpdateInfo | None = None
         self._app_info: updater.UpdateInfo | None = None

@@ -158,12 +158,16 @@ class StrategyRow(QWidget):
 class StrategiesPage(Page):
     def __init__(self, context: AppContext,
                  parent: QWidget | None = None) -> None:
+        from app.ui import scenes
+
         super().__init__(
             context,
-            "Запрет",
-            "Обход блокировок DPI. Стратегия — набор приёмов обмана провайдера: "
-            "у разных провайдеров работают разные, поэтому их много.",
+            "Какая стратегия *приживётся*",
+            "Стратегия — набор приёмов обмана провайдера. У разных провайдеров "
+            "работают разные, поэтому их много, а проверить можно все разом.",
             parent,
+            eyebrow="Обход DPI",
+            scene=scenes.sprouts_vignette,
         )
         self._rows: list[StrategyRow] = []
         self._rows_signature: tuple = ()
@@ -185,58 +189,56 @@ class StrategiesPage(Page):
     # --- текущая стратегия ------------------------------------------------
 
     def _build_current(self) -> None:
-        card = Card(padding=20, spacing=13)
+        from app.ui.widgets import MonoLabel, StatusChip
 
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        self.current_icon = IconLabel("shield_check", self.context.color("accent"), 20)
-        header.addWidget(self.current_icon)
-        header.addWidget(section_label("Стратегия"))
-        header.addStretch(1)
-        self.current_spinner = Spinner(16, self.context.color("accent"))
-        header.addWidget(self.current_spinner)
-        self.current_badge = Badge("выключен", "neutral")
-        header.addWidget(self.current_badge)
-        card.add_layout(header)
+        card = Card(padding=16, spacing=10)
 
         row = QHBoxLayout()
-        row.setSpacing(10)
+        row.setSpacing(12)
+        row.addWidget(MonoLabel("Стратегия", self.context, "ink3"))
         self.current_box = QComboBox()
         # Длинные названия стратегий не должны распирать окно: список сам
         # сжимается, а в раскрытом виде показывает названия целиком.
         self.current_box.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
-        self.current_box.setMinimumContentsLength(14)
-        self.current_box.setMinimumWidth(170)
-        row.addWidget(self.current_box, 1)
-        self.btn_current_args = Button("Аргументы", variant="ghost")
-        self.btn_current_args.clicked.connect(self._show_current_args)
-        row.addWidget(self.btn_current_args)
-        self.btn_current_run = Button("Запустить", variant="primary")
-        self.btn_current_run.clicked.connect(self._apply_current)
-        row.addWidget(self.btn_current_run)
-        self.btn_current_stop = Button("Остановить", variant="soft")
-        self.btn_current_stop.clicked.connect(self._stop_current)
-        row.addWidget(self.btn_current_stop)
-        card.add_layout(row)
-
-        self.current_hint = faint_label("")
-        card.add(self.current_hint)
-        card.add(Divider())
-
-        from app.ui.widgets import SettingRow
-
+        self.current_box.setMinimumContentsLength(12)
+        self.current_box.setMinimumWidth(160)
+        row.addWidget(self.current_box, 2)
+        row.addSpacing(6)
+        row.addWidget(MonoLabel("Режим", self.context, "ink3"))
         self.mode_box = QComboBox()
         self.mode_box.addItem("Служба Windows — работает всегда", MODE_SERVICE)
         self.mode_box.addItem("Процесс — пока открыта программа", MODE_PROCESS)
-        self.mode_box.currentIndexChanged.connect(self._mode_changed)
-        card.add(SettingRow(
-            "Режим работы",
+        self.mode_box.setToolTip(
             "Служба продолжает обход и после закрытия программы, и после "
-            "перезагрузки. Процесс живёт, только пока открыта программа.",
-            self.mode_box,
-        ))
+            "перезагрузки. Процесс живёт, только пока открыта программа.")
+        self.mode_box.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.mode_box.setMinimumContentsLength(12)
+        self.mode_box.currentIndexChanged.connect(self._mode_changed)
+        row.addWidget(self.mode_box, 2)
+        card.add_layout(row)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        self.current_badge = StatusChip("выключен", self.context, False)
+        actions.addWidget(self.current_badge)
+        self.current_hint = faint_label("")
+        actions.addWidget(self.current_hint, 1)
+        self.current_spinner = Spinner(16, self.context.color("accent"))
+        actions.addWidget(self.current_spinner)
+        self.btn_current_args = Button("Аргументы", variant="ghost")
+        self.btn_current_args.clicked.connect(self._show_current_args)
+        actions.addWidget(self.btn_current_args)
+        self.btn_current_stop = Button("Остановить", variant="ghost")
+        self.btn_current_stop.clicked.connect(self._stop_current)
+        actions.addWidget(self.btn_current_stop)
+        self.btn_current_run = Button("Запустить", variant="primary")
+        self.btn_current_run.clicked.connect(self._apply_current)
+        actions.addWidget(self.btn_current_run)
+        card.add_layout(actions)
 
         self.body.addWidget(card)
         self._reload_current()
@@ -270,10 +272,10 @@ class StrategiesPage(Page):
     def _sync_current(self) -> None:
         status = self.context.status
         running = status.running
-        self.current_badge.update_state(
-            f"работает · {status.mode_label}" if running else "выключен",
-            "ok" if running else "neutral",
-        )
+        self.current_badge.set_state("работает" if running else "выключен", running)
+        mode = str(config.get("run_mode", MODE_SERVICE))
+        self.set_eyebrow("Обход DPI · " + (status.mode_label if running else
+                         ("служба Windows" if mode == MODE_SERVICE else "процесс")))
         self.btn_current_run.setText("Перезапустить" if running else "Запустить")
         free = not self._busy and not self._testing
         self.btn_current_stop.setEnabled(running and free)
@@ -285,8 +287,7 @@ class StrategiesPage(Page):
             "Идёт проверка стратегий — обход вернётся сам через несколько секунд."
             if self._testing else
             f"Сейчас работает «{active.title}»." if running and active else
-            "Выберите стратегию и нажмите «Запустить». Не знаете какую — "
-            "нажмите «Проверить все» ниже: программа проверит их разом."
+            "Не знаете какую — вырастите грядку ниже: программа проверит все разом."
         )
 
     def _sync_launchers(self, free: bool) -> None:
@@ -300,6 +301,7 @@ class StrategiesPage(Page):
             row.btn_run.setEnabled(free)
         if hasattr(self, "board"):
             self.board.set_enabled(free)
+            self.bed.set_locked(not free)
             self.btn_apply_best.setEnabled(free)
             if not self._testing:           # во время проверки это «Отменить»
                 self.btn_auto.setEnabled(not self._busy)
@@ -353,38 +355,52 @@ class StrategiesPage(Page):
     # --- подбор: все стратегии разом ---------------------------------------
 
     def _build_autopick(self) -> None:
-        from app.ui.leaderboard import Leaderboard, ShimmerBar
+        from app.ui.leaderboard import Leaderboard, ShimmerBar, SproutBed
+        from app.ui.widgets import MonoLabel
 
-        card = Card(padding=20, spacing=12)
+        card = Card(padding=18, spacing=10)
 
         header = QHBoxLayout()
-        header.setSpacing(10)
-        self.auto_icon = IconLabel("bolt", self.context.color("accent"), 20)
-        header.addWidget(self.auto_icon)
-        header.addWidget(section_label("Подбор стратегии"))
-        header.addStretch(1)
+        header.setSpacing(12)
+        titles = QVBoxLayout()
+        titles.setSpacing(3)
+        title = QLabel("Грядка стратегий")
+        title.setObjectName("CardTitle")
+        titles.addWidget(title)
+        self.auto_caption = MonoLabel("все разом · секунд пятнадцать", self.context, "ink3")
+        titles.addWidget(self.auto_caption)
+        header.addLayout(titles, 1)
         self.auto_spinner = Spinner(16, self.context.color("accent"))
         header.addWidget(self.auto_spinner)
-        self.btn_auto = Button("Проверить все", variant="primary")
+        self.btn_auto = Button("Проверить все  ↻", variant="soft")
         self.btn_auto.clicked.connect(self._toggle_autopick)
         header.addWidget(self.btn_auto)
+        self.btn_apply_best = Button("Применить лучшую  →", variant="primary")
+        self.btn_apply_best.clicked.connect(self._apply_best)
+        header.addWidget(self.btn_apply_best)
+        self.btn_apply_best.setVisible(False)
         card.add_layout(header)
 
-        card.add(faint_label(
+        self.auto_intro = faint_label(
             "Программа на несколько секунд снимет обход, разом проверит все "
-            "стратегии на заблокированных сайтах и вернёт всё как было. "
-            "Останется выбрать лучшую — одним щелчком."
-        ))
+            "стратегии на заблокированных сайтах и вернёт всё как было. Чем выше "
+            "росток, тем больше сайтов открылось; щёлкните по нему — и стратегия встанет."
+        )
+        card.add(self.auto_intro)
 
         self.auto_bar = ShimmerBar(self.context)
         card.add(self.auto_bar)
         self.auto_bar.setVisible(False)
 
+        self.bed = SproutBed(self.context)
+        self.bed.apply_requested.connect(self.run_strategy)
+        card.add(self.bed)
+
         self.auto_status = faint_label("")
         card.add(self.auto_status)
         self.auto_status.setVisible(False)
 
-        # Итог: коротко о лучшей и кнопка, чтобы поставить её сразу.
+        # Итог: коротко о лучшей.
         self.auto_summary = QWidget()
         summary = QHBoxLayout(self.auto_summary)
         summary.setContentsMargins(0, 2, 0, 2)
@@ -392,19 +408,22 @@ class StrategiesPage(Page):
         self.auto_summary_text = QLabel("")
         self.auto_summary_text.setWordWrap(True)
         summary.addWidget(self.auto_summary_text, 1)
-        self.btn_apply_best = Button("Применить лучшую", variant="primary")
-        self.btn_apply_best.clicked.connect(self._apply_best)
-        summary.addWidget(self.btn_apply_best, 0, Qt.AlignmentFlag.AlignVCenter)
         card.add(self.auto_summary)
         self.auto_summary.setVisible(False)
 
+        # Подробности по каждому сайту — в раскрывающемся списке под грядкой.
+        self.board_more = Collapsible("Подробно по сайтам", self.context)
+        self.board_more.set_hint("какие сайты открыла каждая стратегия")
         self.board = Leaderboard(self.context)
         self.board.apply_requested.connect(self.run_strategy)
-        card.add(self.board)
-        self.board.setVisible(False)
+        self.board_more.body.addWidget(self.board)
+        card.add(self.board_more)
+        self.board_more.setVisible(False)
 
         self._best_strategy: Strategy | None = None
         self.body.addWidget(card)
+        current = self.context.current_strategy()
+        self.bed.preview(self.context.load_strategies(), current.id if current else "")
 
     def _toggle_autopick(self) -> None:
         if self._tester is not None:
@@ -452,6 +471,8 @@ class StrategiesPage(Page):
         self.auto_status.setVisible(True)
         self.auto_status.setText("Готовимся…")
         self.auto_summary.setVisible(False)
+        self.btn_apply_best.setVisible(False)
+        self.auto_intro.setVisible(False)
         self._done_ids: set[str] = set()
         self._total_count = 0
 
@@ -511,9 +532,13 @@ class StrategiesPage(Page):
             self._total_count = len(strategies_list)
             self.board.setVisible(True)
             self.board.start(strategies_list, targets)
+            self.bed.start(strategies_list, targets)
+            self.board_more.setVisible(True)
+            self.auto_caption.setText(f"{len(strategies_list)} разом · растут…")
             self.auto_bar.set_fraction(0.25)
         elif kind == parallel.EVENT_RESULT:
             self.board.update_score(payload)
+            self.bed.update_score(payload)
             # По стратегиям, а не по событиям: у одной их бывает два
             # (после первой волны и после перепроверки осечек).
             self._done_ids.add(payload.strategy.id)
@@ -532,7 +557,7 @@ class StrategiesPage(Page):
     def _finish_autopick(self) -> None:
         self.auto_spinner.stop()
         self.auto_bar.stop()
-        self.btn_auto.setText("Проверить заново")
+        self.btn_auto.setText("Проверить заново  ↻")
         self._tester = None
         self._set_testing(False)
         self.context.refresh_status(force=True)
@@ -540,6 +565,7 @@ class StrategiesPage(Page):
     def _auto_failed(self, message: str) -> None:
         self._finish_autopick()
         self.board.stop_waiting()
+        self.bed.stop_waiting()
         self.auto_status.setText(f"Проверка прервалась: {message}")
         self.context.error(f"Проверка прервалась: {message}")
 
@@ -557,15 +583,18 @@ class StrategiesPage(Page):
 
         if outcome.cancelled:
             self.board.stop_waiting()
+            self.bed.stop_waiting()
             self.auto_status.setText("Проверка отменена." + back)
             return
         if report.problem:
             self.board.setVisible(False)
+            self.bed.stop_waiting()
             self.auto_status.setText(report.problem + back)
             self.context.warn(report.problem)
             return
         if report.note:
             self.board.setVisible(False)
+            self.bed.stop_waiting()
             self.auto_status.setText(
                 report.note + " Возможно, провайдер вас не блокирует." + back)
             self.context.ok("Блокировок не обнаружено")
@@ -577,11 +606,14 @@ class StrategiesPage(Page):
         current_id = previous.strategy.id \
             if outcome.restored and previous.strategy is not None else ""
         self.board.finish(scores, current_id)
+        self.bed.finish(scores, current_id)
         best = report.best
         how = "по одной" if outcome.sequential else "разом"
-        self.auto_status.setText(
-            f"Проверено стратегий: {len(scores)} {how} за {report.seconds:.0f} с." + back
-        )
+        self.auto_caption.setText(
+            f"{len(scores)} {how} · {report.seconds:.0f} секунд"
+            + (" · обход возвращён" if outcome.restored else ""))
+        self.auto_status.setText(back.strip())
+        self.auto_status.setVisible(bool(back.strip()))
         if best is None:
             self._best_strategy = None
             self.auto_summary_text.setText(
@@ -610,7 +642,7 @@ class StrategiesPage(Page):
         if already:
             text += " Она у вас и стоит."
         self.auto_summary_text.setText(text)
-        self.btn_apply_best.setText(f"Применить «{best.strategy.title}»")
+        self.btn_apply_best.setText(f"Применить {best.strategy.title}  →")
         self.btn_apply_best.setVisible(not already)
         self.auto_summary.setVisible(True)
         self.context.ok(f"Лучшая стратегия — «{best.strategy.title}»")
@@ -971,15 +1003,16 @@ class StrategiesPage(Page):
         self._reload_rows()
         self._reload_current()
         self._sync_filters()
+        current = self.context.current_strategy()
+        self.bed.preview(self.context.load_strategies(), current.id if current else "")
 
     def apply_theme(self) -> None:
         accent = self.context.color("accent")
-        self.auto_icon.set_color(accent)
         self.auto_spinner.set_color(accent)
-        self.current_icon.set_color(accent)
         self.current_spinner.set_color(accent)
         self.discord_spinner.set_color(accent)
         self.list_more.apply_theme()
+        self.board_more.apply_theme()
         self.board.apply_theme()
         for row in self._rows:
             row.apply_theme()

@@ -9,20 +9,114 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from app.ui.context import AppContext
-from app.ui.widgets import Button, IconLabel
+from app.ui.widgets import Button, IconLabel, MonoLabel, SerifTitle
+
+
+class LedeLabel(QLabel):
+    """Пояснение под заголовком: строки не длиннее ~680 пикселей.
+
+    Обычный setMaximumWidth компоновка не учитывает, когда считает высоту
+    переносов, — и шапка обрезалась сверху. Здесь ширина ограничена в самом
+    расчёте высоты.
+    """
+
+    LIMIT = 680
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        # QLabel вычитает поля сам — прибавляем их, чтобы текст считался
+        # ровно в нужную ширину.
+        return super().heightForWidth(min(width, self.LIMIT) + self.contentsMargins().right())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        margin = max(0, self.width() - self.LIMIT)
+        if self.contentsMargins().right() != margin:
+            self.setContentsMargins(0, 0, margin, 0)
+
+
+class PageHeader(QWidget):
+    """Шапка раздела: моноподпись, заголовок Literata с курсивным словом,
+    короткое пояснение и рисунок справа."""
+
+    def __init__(self, context: AppContext, title: str, subtitle: str = "",
+                 eyebrow: str = "", vignette=None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.context = context
+        row = QHBoxLayout(self)
+        row.setContentsMargins(40, 22, 40, 10)
+        row.setSpacing(28)
+
+        column = QVBoxLayout()
+        column.setSpacing(7)
+        self.eyebrow = MonoLabel(eyebrow, context, "accent_ink", 11, 0.1, self)
+        column.addWidget(self.eyebrow)
+        self.eyebrow.setVisible(bool(eyebrow))
+        self.title_label = SerifTitle(title, context, 34, self)
+        column.addWidget(self.title_label)
+        self.subtitle_label = LedeLabel(subtitle, self)
+        self.subtitle_label.setObjectName("Lede")
+        self.subtitle_label.setWordWrap(True)
+        column.addWidget(self.subtitle_label)
+        self.subtitle_label.setVisible(bool(subtitle))
+        # Пустая компоновка в колонке сжала бы её до минимума: Qt берёт
+        # её нулевую предельную ширину. Поэтому — в виджете, который тянется.
+        extra_host = QWidget(self)
+        extra_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.extra = QHBoxLayout(extra_host)
+        self.extra.setContentsMargins(0, 0, 0, 0)
+        self.extra.setSpacing(8)
+        column.addWidget(extra_host)
+        row.addLayout(column, 1)
+
+        self.side = QVBoxLayout()
+        self.side.setSpacing(0)
+        row.addLayout(self.side)
+        self.vignette = None
+        if vignette is not None:
+            self.set_vignette(vignette)
+
+    def set_vignette(self, widget: QWidget) -> None:
+        self.vignette = widget
+        widget.setParent(self)
+        widget.setFixedWidth(240)
+        self.side.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        # В узком окне рисунок уступает место тексту.
+        if self.vignette is not None:
+            self.vignette.setVisible(self.width() >= 820)
+        # Перенос строк меняет высоту шапки, а внешняя компоновка об этом не
+        # узнаёт сама — без подсказки заголовок обрезался сверху.
+        layout = self.layout()
+        if layout is not None and layout.hasHeightForWidth():
+            needed = layout.totalHeightForWidth(self.width())
+            if needed > 0 and needed != self.minimumHeight():
+                self.setMinimumHeight(needed)
+
+
+def vignette(context: AppContext, scene_factory) -> QWidget:
+    """Маленький рисунок в шапке раздела — без подложки, прямо на бумаге."""
+    from app.ui.ink import InkCanvas
+
+    canvas = InkCanvas(scene_factory(), context, plate="", radius=0)
+    canvas.setFixedHeight(104)
+    return canvas
 
 
 class Page(QWidget):
     """Общий каркас страницы."""
 
     def __init__(self, context: AppContext, title: str, subtitle: str = "",
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, eyebrow: str = "",
+                 scene=None) -> None:
         # Родитель обязателен с самого начала: виджет без родителя Qt
         # считает окном и успевает мигнуть им на экране.
         super().__init__(parent)
@@ -32,30 +126,14 @@ class Page(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        header = QWidget()
+        art = vignette(context, scene) if scene is not None else None
+        header = PageHeader(context, title, subtitle, eyebrow, art, self)
         # Заголовок прячет TabbedPage: у вкладки раздела он общий, сверху.
         self.header = header
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(28, 24, 28, 12)
-        header_layout.setSpacing(4)
-
-        self.title_label = QLabel(title)
-        self.title_label.setObjectName("PageTitle")
-        header_layout.addWidget(self.title_label)
-
-        self.subtitle_label = QLabel(subtitle)
-        self.subtitle_label.setObjectName("PageSubtitle")
-        self.subtitle_label.setWordWrap(True)
-        # Сначала в компоновку, потом видимость: setVisible на виджете
-        # без родителя заставляет Qt показать его отдельным окном.
-        header_layout.addWidget(self.subtitle_label)
-        self.subtitle_label.setVisible(bool(subtitle))
-
-        self.header_extra = QHBoxLayout()
-        self.header_extra.setContentsMargins(0, 6, 0, 0)
-        self.header_extra.setSpacing(8)
-        header_layout.addLayout(self.header_extra)
-
+        self.title_label = header.title_label
+        self.subtitle_label = header.subtitle_label
+        self.eyebrow_label = header.eyebrow
+        self.header_extra = header.extra
         outer.addWidget(header)
 
         self.scroll = QScrollArea()
@@ -68,8 +146,8 @@ class Page(QWidget):
 
         inner = QWidget()
         self.body = QVBoxLayout(inner)
-        self.body.setContentsMargins(28, 4, 28, 28)
-        self.body.setSpacing(16)
+        self.body.setContentsMargins(40, 6, 40, 28)
+        self.body.setSpacing(14)
         self.body.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll.setWidget(inner)
 
@@ -85,6 +163,15 @@ class Page(QWidget):
 
     # --- помощники -------------------------------------------------------
 
+    def set_eyebrow(self, text: str) -> None:
+        self.eyebrow_label.setText(text)
+        self.eyebrow_label.setVisible(bool(text))
+
+    def section_texts(self) -> tuple[str, str, str]:
+        """Слова для шапки раздела, когда страница — его вкладка."""
+        return (self.eyebrow_label.text(), self.title_label.title(),
+                self.subtitle_label.text())
+
     def add_stretch(self) -> None:
         self.body.addStretch(1)
 
@@ -93,12 +180,13 @@ class TabbedPage(QWidget):
     """Раздел с вкладками: «VPN → Подключение | Программы» и подобные.
 
     Вкладки — обычные страницы, только без собственного заголовка: он у
-    раздела один, а под ним — переключатель. Смена вкладки мягко проявляется.
+    раздела один, а справа от него — переключатель. Смена вкладки мягко
+    проявляется.
     """
 
     def __init__(self, context: AppContext, title: str, subtitle: str,
                  tabs: list[tuple[str, str, type]],
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, eyebrow: str = "") -> None:
         super().__init__(parent)
         self.context = context
 
@@ -106,24 +194,17 @@ class TabbedPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        header = QWidget(self)
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(28, 24, 28, 6)
-        header_layout.setSpacing(4)
-        self.title_label = QLabel(title, header)
-        self.title_label.setObjectName("PageTitle")
-        header_layout.addWidget(self.title_label)
-        self.subtitle_label = QLabel(subtitle, header)
-        self.subtitle_label.setObjectName("PageSubtitle")
-        self.subtitle_label.setWordWrap(True)
-        header_layout.addWidget(self.subtitle_label)
-        self.subtitle_label.setVisible(bool(subtitle))
+        header = PageHeader(context, title, subtitle, eyebrow, None, self)
+        self.header = header
+        self.title_label = header.title_label
+        self.subtitle_label = header.subtitle_label
+        self.eyebrow_label = header.eyebrow
 
         bar = QFrame(header)
         bar.setObjectName("SegmentBar")
         bar_layout = QHBoxLayout(bar)
-        bar_layout.setContentsMargins(4, 4, 4, 4)
-        bar_layout.setSpacing(4)
+        bar_layout.setContentsMargins(3, 3, 3, 3)
+        bar_layout.setSpacing(2)
         self._buttons: dict[str, QPushButton] = {}
         self.stack = QStackedWidget(self)
         self._pages: dict[str, QWidget] = {}
@@ -145,11 +226,8 @@ class TabbedPage(QWidget):
             self._pages[key] = page
             self._order.append(key)
 
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 8, 0, 0)
-        row.addWidget(bar)
-        row.addStretch(1)
-        header_layout.addLayout(row)
+        header.side.addStretch(1)
+        header.side.addWidget(bar, 0, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
         outer.addWidget(header)
         outer.addWidget(self.stack, 1)
@@ -181,20 +259,33 @@ class TabbedPage(QWidget):
         from app.ui.widgets import transition
 
         changed = key != self._current
+        step = 0
+        if self._current in self._order:
+            step = 1 if self._order.index(key) > self._order.index(self._current) else -1
         self._current = key
         for name, button in self._buttons.items():
             button.setChecked(name == key)
+        # Шапка подстраивается под вкладку, если у вкладки свои слова.
+        texts = getattr(page, "section_texts", None)
+        if callable(texts):
+            eyebrow, title, subtitle = texts()
+            self.eyebrow_label.setText(eyebrow)
+            self.eyebrow_label.setVisible(bool(eyebrow))
+            self.title_label.set_title(title)
+            self.subtitle_label.setText(subtitle)
+            self.subtitle_label.setVisible(bool(subtitle))
         animated = False
         if changed and activate and self.stack.currentWidget() is not None:
             animated = transition(self.stack, lambda: self.stack.setCurrentWidget(page),
-                                  self.context.color("bg"), duration=200, slide=8)
+                                  self.context.color("bg"), duration=340, slide=0,
+                                  shift=14.0 * step)
         else:
             self.stack.setCurrentWidget(page)
         if activate:
             handler = getattr(page, "on_activate", None)
             if callable(handler):
                 if animated:
-                    QTimer.singleShot(220, handler)
+                    QTimer.singleShot(360, handler)
                 else:
                     handler()
 

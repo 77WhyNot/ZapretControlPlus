@@ -12,10 +12,12 @@ from app.core.constants import CONFIG_VERSION
 DEFAULTS: dict[str, Any] = {
     "config_version": CONFIG_VERSION,
     # Внешний вид
-    "theme": "light",             # см. ui/theme.py
-    "accent": "sapphire",
+    "theme": "light",             # light | dark | system — см. ui/theme.py
+    "accent": "sapphire",         # от прошлых версий, в «Пергаменте» не используется
     "accent_migrated_blue": False,  # разовый перевод старого рубина на синий
-    "last_dark_theme": "rails",   # куда возвращает кнопка «тёмная» в заголовке
+    "last_dark_theme": "dark",
+    "motion": "full",             # full — сцены живут | calm — без дыхания линии | off
+    "pergament_migrated": False,  # разовый переход тем на «Пергамент» (4.0)
     # Поведение
     "run_mode": "service",        # service | process
     "last_strategy": "general",
@@ -75,10 +77,12 @@ DEFAULTS: dict[str, Any] = {
     "game_filter_tcp_range": "",
     "game_filter_udp_range": "",
     # Прочее
-    "home_dns_preset": "xbox",      # сервис Smart DNS для тумблера на главной
+    "home_dns_preset": "comss",     # сервис Smart DNS для тумблера на главной
     "speedtest_last": {},           # последний замер скорости, чтобы не пустовало
     "first_run": True,
     "seen_version": "",            # версия, про которую уже рассказали «что нового»
+    "tour_done": False,            # знакомство с разделами пройдено или пропущено
+    "xbox_dns_replaced": False,    # закрытый Xbox DNS уже заменён (4.0)
     "window_geometry": "",
     "diagnostics_autorun": True,
 }
@@ -145,6 +149,21 @@ class Config:
             if self._data.get("accent") == "ruby":
                 self._data["accent"] = "sapphire"
             self._data["accent_migrated_blue"] = True
+            changed = True
+        # 4.0: восемь тем свелись к «Бумаге» и «Ночи». Кто сидел на тёмной,
+        # остаётся на тёмной; системная остаётся системной.
+        if not self._data.get("pergament_migrated"):
+            theme = str(self._data.get("theme", "light"))
+            self._data["theme"] = {"rails": "dark", "midnight": "dark",
+                                   "sand": "light"}.get(theme, theme)
+            if self._data["theme"] not in ("light", "dark", "system"):
+                self._data["theme"] = "light"
+            self._data["last_dark_theme"] = "dark"
+            self._data["pergament_migrated"] = True
+            changed = True
+        # Xbox DNS закрыт — на главной вместо него Comss.
+        if self._data.get("home_dns_preset") == "xbox":
+            self._data["home_dns_preset"] = "comss"
             changed = True
         if changed:
             self.save()

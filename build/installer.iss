@@ -1,7 +1,7 @@
-; Установщик Zapret Control+ (Inno Setup 6)
+; Установщик ZapretCtrl (Inno Setup 6). До 4.0 программа называлась Zapret Control+.
 ; Сборка: build\build.ps1 — он подставит версию и запустит ISCC.
 
-#define AppName "Zapret Control+"
+#define AppName "ZapretCtrl"
 #define AppExeName "ZapretControlPlus.exe"
 #define AppPublisher "Ivan Milyaev (ketamine)"
 #define AppUrl "https://github.com/77WhyNot/ZapretControlPlus"
@@ -23,6 +23,8 @@ VersionInfoDescription={#AppName} — обход блокировок, VPN и Sm
 
 DefaultDirName={autopf}\Zapret Control Plus
 DefaultGroupName={#AppName}
+; Группа в «Пуске» — новая, ZapretCtrl: прежнюю «Zapret Control+» убираем ниже.
+UsePreviousGroup=no
 DisableProgramGroupPage=yes
 AllowNoIcons=yes
 
@@ -76,6 +78,12 @@ Source: "..\payload\zapret\*"; DestDir: "{app}\core"; \
 Source: "..\payload\singbox\*"; DestDir: "{app}\singbox"; \
     Excludes: "cache.db"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+; Ярлыки прежнего имени — чтобы в «Пуске» и на столе не осталось двойников.
+Type: filesandordirs; Name: "{autoprograms}\Zapret Control+"
+Type: files; Name: "{autodesktop}\Zapret Control+.lnk"
+Type: files; Name: "{commondesktop}\Zapret Control+.lnk"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -163,7 +171,7 @@ begin
   if PreviousInstallFound() then
   begin
     ActionPage := CreateInputOptionPage(wpWelcome,
-      'Zapret Control+ уже установлена',
+      'ZapretCtrl уже установлена',
       'На компьютере найдена версия ' + PrevVersion + '.',
       'Выберите, что сделать:', True, False);
     ActionPage.Add('Обновить — настройки, списки и подписка сохранятся');

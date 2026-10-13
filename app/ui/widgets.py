@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from typing import Callable
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QPointF,
     QObject,
     QPropertyAnimation,
     QRect,
@@ -30,6 +32,20 @@ from PySide6.QtWidgets import (
 )
 
 from app.ui import icons
+
+
+# Палитра текущей темы — для виджетов, которые рисуют себя сами и не знают
+# о контексте (тумблеры, подписи). Обновляет AppContext при смене темы.
+TOKENS: dict[str, str] = {}
+
+
+def set_tokens(tokens: dict[str, str]) -> None:
+    TOKENS.clear()
+    TOKENS.update(tokens)
+
+
+def token(name: str, fallback: str = "#141413") -> str:
+    return TOKENS.get(name, fallback)
 
 
 def apply_variant(widget: QWidget, variant: str = "", size: str = "") -> QWidget:
@@ -83,10 +99,16 @@ class FrameClock(QObject):
 
     def _tick(self) -> None:
         drawn = 0
+        self._count = getattr(self, "_count", 0) + 1
         for widget in list(self._subscribers):
             try:
                 if widget.isVisible() and not widget.window().isMinimized():
-                    widget.update()
+                    # Тихим сценам хватает и 15 кадров: они сами говорят,
+                    # через сколько тиков их перерисовывать.
+                    divider = getattr(widget, "frame_divider", None)
+                    step = divider() if callable(divider) else 1
+                    if step <= 1 or self._count % step == 0:
+                        widget.update()
                     drawn += 1
             except RuntimeError:  # виджет уже удалён
                 self._subscribers.discard(widget)
@@ -111,6 +133,14 @@ def fade_in(widget: QWidget, duration: int = 220, delay: int = 0,
     """Мягко проявить виджет. Эффект снимаем сразу после: он замедляет отрисовку."""
     from PySide6.QtWidgets import QGraphicsOpacityEffect
 
+    # Прошлое проявление ещё идёт — останавливаем его до того, как снимем
+    # эффект: иначе анимация остаётся без цели и Qt ругается.
+    previous = getattr(widget, "_fade_animation", None)
+    if previous is not None:
+        try:
+            previous.stop()
+        except RuntimeError:
+            pass
     effect = QGraphicsOpacityEffect(widget)
     effect.setOpacity(0.0)
     widget.setGraphicsEffect(effect)
@@ -120,6 +150,7 @@ def fade_in(widget: QWidget, duration: int = 220, delay: int = 0,
     animation.setEndValue(1.0)
     animation.setEasingCurve(QEasingCurve.Type.OutCubic)
     animation.finished.connect(lambda: widget.setGraphicsEffect(None))
+    widget._fade_animation = animation
     if keep is not None:
         keep.append(animation)
     if delay <= 0:
@@ -129,7 +160,8 @@ def fade_in(widget: QWidget, duration: int = 220, delay: int = 0,
     # уже некому и нечему — иначе Qt падает на удалённом объекте.
     timer = QTimer(widget)
     timer.setSingleShot(True)
-    timer.timeout.connect(animation.start)
+    timer.timeout.connect(lambda: animation.start()
+                          if widget.graphicsEffect() is effect else None)
     timer.start(delay)
 
 
@@ -163,6 +195,7 @@ class _Transition(QWidget):
         self._after = None
         self._background = QColor("#000000")
         self._slide = 0.0
+        self._shift = 0.0
         self._progress = 0.0
         # Непрозрачный: под ним Qt ничего не перерисовывает.
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -178,17 +211,20 @@ class _Transition(QWidget):
         self._animation = QVariantAnimation(self)
         self._animation.setStartValue(0.0)
         self._animation.setEndValue(1.0)
-        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # Быстрый старт и долгое мягкое торможение — как всё движение в программе.
+        self._animation.setEasingCurve(QEasingCurve.Type.OutExpo)
         self._animation.valueChanged.connect(self._advance)
         self._animation.finished.connect(self.finish)
 
-    def play(self, before, after, background: QColor, duration: int, slide: float) -> None:
+    def play(self, before, after, background: QColor, duration: int, slide: float,
+             shift: float = 0.0) -> None:
         # Слой один на всю жизнь окна: новый виджет Qt каждый раз заново
         # сверял бы со всеми правилами темы, а это лишние миллисекунды щелчка.
         self._before = before
         self._after = after
         self._background = QColor(background)
         self._slide = slide
+        self._shift = shift
         self._progress = 0.0
         self.setGeometry(self._host.rect())
         self._animation.setDuration(duration)
@@ -220,17 +256,19 @@ class _Transition(QWidget):
         painter = QPainter(self)
         progress = self._progress
         offset = (1.0 - progress) * self._slide
-        if offset > 0.01:
+        dx = (1.0 - progress) * self._shift
+        if offset > 0.01 or abs(dx) > 0.01:
             painter.fillRect(self.rect(), self._background)
-        painter.drawPixmap(0, int(round(offset)), self._after)
+        painter.drawPixmap(int(round(dx)), int(round(offset)), self._after)
         if progress < 1.0:
-            painter.setOpacity(1.0 - progress)
-            painter.drawPixmap(0, 0, self._before)
+            # Старый вид чуть уходит в другую сторону и тает быстрее.
+            painter.setOpacity(max(0.0, 1.0 - progress * 1.35))
+            painter.drawPixmap(int(round(-progress * self._shift * 0.5)), 0, self._before)
         painter.end()
 
 
 def transition(host: QWidget, switch: Callable[[], None], background,
-               duration: int = 220, slide: float = 10.0) -> bool:
+               duration: int = 220, slide: float = 10.0, shift: float = 0.0) -> bool:
     """Сменить содержимое host плавно: switch() меняет его, а переход рисуется
     поверх из двух снимков. Возвращает True, если переход был."""
     if not host.isVisible() or host.width() < 2 or host.height() < 2:
@@ -247,7 +285,7 @@ def transition(host: QWidget, switch: Callable[[], None], background,
     overlay.finish()
     switch()
     after = snapshot(host, background)
-    overlay.play(before, after, background, duration, slide)
+    overlay.play(before, after, background, duration, slide, shift)
     return True
 
 
@@ -396,7 +434,11 @@ class Button(QPushButton):
 
 
 class Switch(QWidget):
-    """Анимированный переключатель вместо стандартного QCheckBox."""
+    """Тумблер, нарисованный тушью: неровная рамка и бегунок-капля.
+
+    Выключен — бегунок серый слева, включён — глиняный справа. Едет с
+    быстрым стартом и долгим торможением, как всё в программе.
+    """
 
     toggled = Signal(bool)
 
@@ -404,14 +446,15 @@ class Switch(QWidget):
         super().__init__(parent)
         self._checked = checked
         self._offset = 1.0 if checked else 0.0
-        self._track_on = QColor("#2563EB")
-        self._track_off = QColor("#CDD4DE")
-        self._knob = QColor("#FFFFFF")
-        self.setFixedSize(42, 24)
+        self._on: QColor | None = None
+        self._ink: QColor | None = None
+        self._hover = False
+        self.setFixedSize(46, 26)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self._animation = QPropertyAnimation(self, b"offset", self)
-        self._animation.setDuration(160)
-        self._animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._animation.setDuration(380)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutExpo)
 
     def get_offset(self) -> float:
         return self._offset
@@ -422,10 +465,13 @@ class Switch(QWidget):
 
     offset = Property(float, get_offset, set_offset)
 
-    def set_colors(self, on: str, off: str, knob: str) -> None:
-        self._track_on = QColor(on)
-        self._track_off = QColor(off)
-        self._knob = QColor(knob)
+    def set_colors(self, on: str = "", off: str = "", knob: str = "") -> None:
+        """Совместимость: цвета тумблера теперь всегда из темы (глина и тушь)."""
+        self.update()
+
+    def set_ink(self, color: str) -> None:
+        """Тушь рамки — для тумблера на марке: бумага там всегда светлая."""
+        self._ink = QColor(color) if color else None
         self.update()
 
     def isChecked(self) -> bool:  # noqa: N802 — совместимость с QCheckBox
@@ -435,13 +481,30 @@ class Switch(QWidget):
         if value == self._checked:
             return
         self._checked = value
-        if animate:
+        if animate and self.isVisible():
             self._animation.stop()
             self._animation.setStartValue(self._offset)
             self._animation.setEndValue(1.0 if value else 0.0)
             self._animation.start()
         else:
             self.set_offset(1.0 if value else 0.0)
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.setChecked(not self._checked)
+            self.toggled.emit(self._checked)
+            return
+        super().keyPressEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.pos()):
@@ -450,26 +513,59 @@ class Switch(QWidget):
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        from PySide6.QtGui import QPainterPath, QPen
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        radius = self.height() / 2
+        if not self.isEnabled():
+            painter.setOpacity(0.45)
+        # Рамка с чуть разными радиусами углов — как обведено от руки.
+        r = QRectF(1.2, 1.2, self.width() - 2.4, self.height() - 2.4)
+        path = QPainterPath()
+        path.moveTo(r.left() + 13, r.top())
+        path.lineTo(r.right() - 12, r.top() + 0.3)
+        path.cubicTo(r.right() + 0.6, r.top() + 0.6, r.right() + 0.2, r.bottom() - 0.4,
+                     r.right() - 12.5, r.bottom())
+        path.lineTo(r.left() + 12.5, r.bottom() - 0.2)
+        path.cubicTo(r.left() - 0.5, r.bottom(), r.left() - 0.3, r.top() + 0.2,
+                     r.left() + 13, r.top())
+        on_color = self._on or QColor(token("clay", "#D97757"))
+        off_color = QColor(token("decor", "#87867F"))
+        ink = self._ink or QColor(token("ink", "#141413"))
+        if self._offset > 0.01:
+            tint = QColor(on_color)
+            tint.setAlphaF(0.16 * self._offset)
+            painter.fillPath(path, tint)
+        pen = QPen(ink)
+        pen.setWidthF(1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+        if self.hasFocus():
+            focus = QPen(on_color)
+            focus.setWidthF(1.2)
+            focus.setStyle(Qt.PenStyle.DotLine)
+            painter.setPen(focus)
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(-0.5, -0.5, 0.5, 0.5), 14, 14)
 
-        track = QColor(self._track_off)
-        target = QColor(self._track_on)
-        blended = QColor(
-            int(track.red() + (target.red() - track.red()) * self._offset),
-            int(track.green() + (target.green() - track.green()) * self._offset),
-            int(track.blue() + (target.blue() - track.blue()) * self._offset),
+        knob = 17.0
+        travel = 19.0
+        t = self._offset
+        x = 4.0 + travel * t
+        # Бегунок чуть вытягивается в пути — как капля краски.
+        stretch = 1.0 + 0.22 * math.sin(math.pi * t) if 0.0 < t < 1.0 else 1.0
+        color = QColor(
+            int(off_color.red() + (on_color.red() - off_color.red()) * t),
+            int(off_color.green() + (on_color.green() - off_color.green()) * t),
+            int(off_color.blue() + (on_color.blue() - off_color.blue()) * t),
         )
+        if self._hover and self.isEnabled():
+            color = color.darker(108)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(blended)
-        painter.drawRoundedRect(QRectF(self.rect()), radius, radius)
-
-        knob_size = self.height() - 6
-        travel = self.width() - knob_size - 6
-        x = 3 + travel * self._offset
-        painter.setBrush(self._knob)
-        painter.drawEllipse(QRectF(x, 3, knob_size, knob_size))
+        painter.setBrush(color)
+        w = knob * stretch
+        painter.drawEllipse(QRectF(x - (w - knob) / 2, (self.height() - knob) / 2, w, knob))
         painter.end()
 
 
@@ -976,3 +1072,159 @@ class Collapsible(QWidget):
 
     def apply_theme(self) -> None:
         self.chevron.set_color(self.context.color("text_dim"))
+
+
+class MonoLabel(QWidget):
+    """Подпись моноширинным шрифтом ЗАГЛАВНЫМИ, с разрядкой — как на бланке.
+
+    Рисуется сама: межбуквенное расстояние стилем Qt не задать.
+    """
+
+    def __init__(self, text: str = "", context=None, token: str = "ink3",
+                 size: float = 10.5, spacing: float = 0.1,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.context = context
+        self.token = token
+        self._size = size
+        self._spacing = spacing
+        self._text = ""
+        self._color = None
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if context is not None:
+            context.theme_changed.connect(self.update)
+        self.setText(text)
+
+    def _font(self):
+        from app.ui import fonts
+
+        return fonts.mono(self._size, 500, self._spacing)
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        text = str(text).upper()
+        if text == self._text:
+            return
+        self._text = text
+        self.updateGeometry()
+        self.update()
+
+    def text(self) -> str:
+        return self._text
+
+    def set_token(self, token: str) -> None:
+        if token != self.token:
+            self.token = token
+            self.update()
+
+    def set_color(self, color: str) -> None:
+        self._color = color
+        self.update()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        from PySide6.QtGui import QFontMetricsF
+
+        metrics = QFontMetricsF(self._font())
+        return QSize(int(metrics.horizontalAdvance(self._text)) + 2, int(metrics.height()) + 2)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        hint = self.sizeHint()
+        return QSize(min(hint.width(), 40), hint.height())
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setFont(self._font())
+        color = self._color or (self.context.color(self.token) if self.context else "#5E5D59")
+        painter.setPen(QColor(color))
+        metrics = painter.fontMetrics()
+        text = metrics.elidedText(self._text, Qt.TextElideMode.ElideRight, self.width())
+        painter.drawText(QRectF(self.rect()), int(Qt.AlignmentFlag.AlignLeft
+                                                  | Qt.AlignmentFlag.AlignVCenter), text)
+        painter.end()
+
+
+class StatusChip(MonoLabel):
+    """«Штемпель» состояния: кружок с точкой и подпись. Олива — работает."""
+
+    def __init__(self, text: str = "", context=None, on: bool = False,
+                 parent: QWidget | None = None) -> None:
+        self._on = on
+        self._kind = ""
+        super().__init__(text, context, "ok" if on else "muted", 10.5, 0.1, parent)
+
+    def set_state(self, text: str, on: bool, kind: str = "") -> None:
+        """kind: warn / error — подкрасить иначе, чем «работает» или «выключено»."""
+        self._on = on
+        self._kind = kind
+        self.token = {"warn": "warn", "error": "bad"}.get(kind, "ok" if on else "muted")
+        self.setText(text)
+        self.update()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        hint = super().sizeHint()
+        return QSize(hint.width() + 16, max(hint.height(), 14))
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from PySide6.QtGui import QPen
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        color = QColor(self.context.color(self.token) if self.context else "#4F6A3A")
+        cy = self.height() / 2
+        pen = QPen(color)
+        pen.setWidthF(1.5)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(5.5, cy), 4.5, 4.5)
+        if self._on or self._kind:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(5.5, cy), 2.0, 2.0)
+        painter.setFont(self._font())
+        painter.setPen(color)
+        metrics = painter.fontMetrics()
+        text = metrics.elidedText(self._text, Qt.TextElideMode.ElideRight, self.width() - 16)
+        painter.drawText(QRectF(16, 0, self.width() - 16, self.height()),
+                         int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), text)
+        painter.end()
+
+
+def rich_title(text: str, accent: str) -> str:
+    """«Какая стратегия *приживётся*» → HTML с курсивом цветом акцента."""
+    import html
+    import re
+
+    escaped = html.escape(text)
+    return re.sub(r"\*(.+?)\*",
+                  lambda m: f'<i style="color:{accent}; font-style: italic;">{m.group(1)}</i>',
+                  escaped)
+
+
+class SerifTitle(QLabel):
+    """Заголовок Literata тонким начертанием; *слово* — курсивом акцента."""
+
+    def __init__(self, text: str = "", context=None, size: int = 34,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.context = context
+        self._raw = ""
+        self.setObjectName("PageTitle" if size <= 36 else "HeroTitle")
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setWordWrap(True)
+        if size not in (34, 40):
+            self.setStyleSheet(f"font-size: {size}px;")
+        if context is not None:
+            context.theme_changed.connect(self._render)
+        self.set_title(text)
+
+    def set_title(self, text: str) -> None:
+        self._raw = text
+        self._render()
+
+    def title(self) -> str:
+        return self._raw
+
+    def _render(self) -> None:
+        accent = self.context.color("accent") if self.context else "#C6613F"
+        QLabel.setText(self, rich_title(self._raw, accent))

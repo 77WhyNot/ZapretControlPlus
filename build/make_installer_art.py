@@ -19,8 +19,12 @@ TARGET_DIR = ROOT / "build" / "art"
 BANNER_SIZE = (492, 942)
 SMALL_SIZE = (165, 165)
 
-TOP = (10, 16, 36)
-BOTTOM = (29, 78, 216)
+# «Пергамент»: бумага сверху, тёплая тарелка снизу.
+TOP = (250, 249, 245)
+BOTTOM = (227, 218, 204)
+INK = (20, 20, 19)
+CLAY = (217, 119, 87)
+OLIVE = (120, 140, 93)
 
 
 def gradient(size: tuple[int, int]) -> Image.Image:
@@ -38,49 +42,35 @@ def make_banner() -> Image.Image:
     canvas = gradient(BANNER_SIZE).convert("RGBA")
     width, height = BANNER_SIZE
 
-    # Мягкое световое пятно за щитом.
-    glow = Image.new("L", BANNER_SIZE, 0)
-    ImageDraw.Draw(glow).ellipse(
-        (width * 0.05, height * 0.16, width * 0.95, height * 0.52), fill=90
+    # Солнце-глина за знаком.
+    sun = Image.new("L", BANNER_SIZE, 0)
+    ImageDraw.Draw(sun).ellipse(
+        (width * 0.52, height * 0.12, width * 0.88, height * 0.12 + width * 0.36), fill=255
     )
-    glow = glow.filter(ImageFilter.GaussianBlur(width * 0.12))
-    canvas = Image.alpha_composite(
-        canvas,
-        Image.composite(
-            Image.new("RGBA", BANNER_SIZE, (130, 175, 255, 255)),
-            Image.new("RGBA", BANNER_SIZE, (0, 0, 0, 0)),
-            glow,
-        ),
-    )
+    sun = sun.filter(ImageFilter.GaussianBlur(2))
+    canvas = Image.alpha_composite(canvas, Image.composite(
+        Image.new("RGBA", BANNER_SIZE, CLAY + (255,)),
+        Image.new("RGBA", BANNER_SIZE, (0, 0, 0, 0)), sun))
 
-    shield = build_icon().resize(
-        (int(width * 0.62), int(width * 0.62)), Image.Resampling.LANCZOS
+    sprout = build_icon().resize(
+        (int(width * 0.66), int(width * 0.66)), Image.Resampling.LANCZOS
     )
-    canvas.alpha_composite(
-        shield,
-        (int((width - shield.width) / 2), int(height * 0.20)),
-    )
+    canvas.alpha_composite(sprout, (int((width - sprout.width) / 2), int(height * 0.24)))
 
-    # Тонкая диагональная штриховка снизу — немного «продукта».
-    stripes = Image.new("L", BANNER_SIZE, 0)
-    draw = ImageDraw.Draw(stripes)
-    for offset in range(-height, width, 26):
-        draw.line(
-            [(offset, height), (offset + height, 0)], fill=16, width=7
-        )
-    canvas = Image.alpha_composite(
-        canvas,
-        Image.composite(
-            Image.new("RGBA", BANNER_SIZE, (255, 255, 255, 255)),
-            Image.new("RGBA", BANNER_SIZE, (0, 0, 0, 0)),
-            stripes,
-        ),
-    )
+    # Холм и линия земли тушью — как в саду на главной.
+    draw = ImageDraw.Draw(canvas)
+    ground = int(height * 0.80)
+    draw.rectangle((0, ground, width, height), fill=(195, 204, 176, 255))
+    points = [(x, ground + 6 * __import__("math").sin(x / width * 6.0)) for x in range(0, width + 8, 8)]
+    draw.line(points, fill=INK + (255,), width=6, joint="curve")
+    for x in (width * 0.18, width * 0.74):
+        draw.line([(x, ground), (x - 8, ground - 34)], fill=INK + (255,), width=5)
+        draw.line([(x + 14, ground), (x + 18, ground - 42)], fill=INK + (255,), width=5)
     return canvas.convert("RGB")
 
 
 def make_small() -> Image.Image:
-    canvas = Image.new("RGB", SMALL_SIZE, (255, 255, 255))
+    canvas = Image.new("RGB", SMALL_SIZE, TOP)
     shield = build_icon().resize(
         (int(SMALL_SIZE[0] * 0.86), int(SMALL_SIZE[0] * 0.86)),
         Image.Resampling.LANCZOS,

@@ -80,6 +80,11 @@ def _selftest() -> int:
 
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     application = QApplication(sys.argv)
+    from app.ui import fonts
+
+    print(f"шрифты: {'ок' if fonts.load() else 'НЕ НАЙДЕНЫ'}")
+    if not fonts.load():
+        raise SystemExit("шрифты оформления не попали в сборку")
 
     from app.core import autotest, diagnostics, strategies
     from app.ui.window import PAGES, MainWindow
@@ -132,22 +137,32 @@ def _selftest() -> int:
     for key, title, _ in PAGES:
         window.show_page(key)
         print(f"страница {title}: ок")
-    for theme_key in ("dark", "midnight", "sand", "light"):
+    for theme_key in ("dark", "system", "light"):
         config.set("theme", theme_key, save=False)
         window.apply_theme()
     print("темы: ок")
 
-    # Карточка приветствия: модуль подтягивается только при показе, поэтому
-    # в собранном виде её нужно проверить отдельно.
-    from app.ui.welcome import Intro
+    # Знакомство и «что нового»: модуль подтягивается только при показе,
+    # поэтому в собранном виде их нужно проверить отдельно — вместе со
+    # снимками прежнего облика, которые лежат в ресурсах.
+    from app.core import paths as paths_module, whatsnew
+    from app.ui.tour import Tour, WhatsNew
 
-    for kind in ("welcome", "changes"):
-        card = Intro(window, window.context, kind)
-        card.show_animated()
+    for name in ("home-light.png", "home-dark.png"):
+        if not paths_module.resource_path("legacy", name).exists():
+            raise SystemExit(f"нет снимка прежнего облика: {name}")
+    tour = Tour(window, window.context)
+    tour.start()
+    for index in range(len(tour.steps)):
+        tour.go(index)
         application.processEvents()
-        card.close_animated()
-        application.processEvents()
-    print("приветствие: ок")
+    tour.finish(skipped=True)
+    news = WhatsNew(window, window.context, whatsnew.changes_for(), "3.8.0")
+    news.start()
+    application.processEvents()
+    news.close_animated("close")
+    application.processEvents()
+    print("знакомство и «что нового»: ок")
 
     from app.ui.clown import ClownScreen
 
@@ -179,6 +194,12 @@ def main() -> int:
     application.setApplicationVersion(APP_VERSION)
     application.setOrganizationName(APP_ID)
     application.setQuitOnLastWindowClosed(False)
+
+    # Шрифты оформления вшиты в программу: Literata, Geist, Geist Mono.
+    from app.ui import fonts
+
+    if fonts.load():
+        application.setFont(fonts.sans(13.5))
 
     # Отдельный AppUserModelID — иначе Windows группирует окно с python.exe.
     try:

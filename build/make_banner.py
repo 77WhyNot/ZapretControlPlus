@@ -1,4 +1,6 @@
-"""Баннер для шапки README и страницы GitHub.
+"""Баннер для шапки README и страницы GitHub: название и сад из главной.
+
+Рисуется тем же движком, что и интерфейс программы.
 
 Запуск: python build/make_banner.py
 Результат: docs/banner.png
@@ -6,98 +8,79 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "build"))
+sys.path.insert(0, str(ROOT))
 
-from make_icon import build_icon  # noqa: E402
+from PySide6.QtCore import QPointF, QRectF  # noqa: E402
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPainterPath  # noqa: E402
 
 SIZE = (1280, 420)
-TOP = (8, 12, 28)
-BOTTOM = (22, 52, 150)
-BLUE = (59, 118, 240)
-
 TARGET = ROOT / "docs" / "banner.png"
 
 
-def _font(names: list[str], size: int) -> ImageFont.FreeTypeFont:
-    for name in names:
-        try:
-            return ImageFont.truetype(name, size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
+def build() -> QImage:
+    from app.ui import fonts, scenes, theme
+    from app.ui.ink import SceneRenderer, render_postmark, scene_palette
 
-
-def gradient(size: tuple[int, int]) -> Image.Image:
-    width, height = size
-    base = Image.new("RGB", (1, height))
-    for y in range(height):
-        t = (y / max(height - 1, 1)) ** 0.85
-        base.putpixel((0, y), tuple(
-            round(TOP[i] + (BOTTOM[i] - TOP[i]) * t) for i in range(3)
-        ))
-    return base.resize(size, Image.Resampling.BICUBIC)
-
-
-def build() -> Image.Image:
+    fonts.load()
+    tokens = theme.build_tokens("light")
     width, height = SIZE
-    canvas = gradient(SIZE).convert("RGBA")
+    image = QImage(width * 2, height * 2, QImage.Format.Format_ARGB32_Premultiplied)
+    image.setDevicePixelRatio(2.0)
+    image.fill(QColor(tokens["bg"]))
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    # Световое пятно за щитом.
-    glow = Image.new("L", SIZE, 0)
-    ImageDraw.Draw(glow).ellipse(
-        (width * 0.02, height * 0.05, width * 0.42, height * 1.05), fill=120
-    )
-    glow = glow.filter(ImageFilter.GaussianBlur(90))
-    canvas = Image.alpha_composite(canvas, Image.composite(
-        Image.new("RGBA", SIZE, (*BLUE, 255)),
-        Image.new("RGBA", SIZE, (0, 0, 0, 0)),
-        glow,
-    ))
+    # Слова слева.
+    painter.setFont(fonts.mono(14, 500, 0.12))
+    painter.setPen(QColor(tokens["accent_ink"]))
+    painter.drawText(QPointF(64, 128), "ОБХОД · VPN · TELEGRAM · SMART DNS")
+    painter.setFont(fonts.serif(84, 300))
+    painter.setPen(QColor(tokens["ink"]))
+    metrics = painter.fontMetrics()
+    painter.drawText(QPointF(60, 222), "Zapret")
+    x = 60 + metrics.horizontalAdvance("Zapret")
+    painter.setFont(fonts.serif(84, 300, italic=True))
+    painter.setPen(QColor(tokens["accent"]))
+    painter.drawText(QPointF(x, 222), "Ctrl")
+    painter.setFont(fonts.sans(20, 400))
+    painter.setPen(QColor(tokens["ink3"]))
+    painter.drawText(QPointF(64, 272), "Обход блокировок, VPN по программам,")
+    painter.drawText(QPointF(64, 302), "Telegram и Smart DNS — в одном окне.")
 
-    # Тонкие диагональные линии — намёк на трафик.
-    stripes = Image.new("L", SIZE, 0)
-    draw = ImageDraw.Draw(stripes)
-    for offset in range(-height, width + height, 46):
-        draw.line([(offset, height), (offset + height, 0)], fill=14, width=9)
-    canvas = Image.alpha_composite(canvas, Image.composite(
-        Image.new("RGBA", SIZE, (255, 255, 255, 255)),
-        Image.new("RGBA", SIZE, (0, 0, 0, 0)),
-        stripes,
-    ))
-
-    shield = build_icon().resize((248, 248), Image.Resampling.LANCZOS)
-    canvas.alpha_composite(shield, (92, (height - 248) // 2))
-
-    draw = ImageDraw.Draw(canvas)
-    title_font = _font(["bahnschrift.ttf", "segoeuib.ttf", "arialbd.ttf"], 92)
-    sub_font = _font(["segoeui.ttf", "arial.ttf"], 32)
-    small_font = _font(["consola.ttf", "cour.ttf"], 25)
-
-    left = 392
-    draw.text((left, 122), "Zapret Control+", font=title_font, fill=(255, 255, 255))
-    draw.text(
-        (left, 232),
-        "Обход блокировок и VPN — в одном окне",
-        font=sub_font, fill=(214, 226, 250),
-    )
-    draw.text(
-        (left, 286),
-        "zapret · VPN по программам · Telegram · Smart DNS · замер скорости",
-        font=small_font, fill=(160, 190, 240),
-    )
-    return canvas.convert("RGB")
+    # Сад справа, на тарелке, всё включено.
+    plate = QRectF(640, 40, 580, 310)
+    path = QPainterPath()
+    path.addRoundedRect(plate, 26, 26)
+    painter.fillPath(path, QColor(tokens["plate"]))
+    renderer = SceneRenderer(scenes.garden(), scene_palette(tokens))
+    for key in ("dpi", "vpn", "tg", "dns", "any"):
+        renderer.set_state(key, True, animate=False)
+    painter.save()
+    painter.setClipPath(path)
+    renderer.paint(painter, QRectF(plate.left(), plate.top() + 5, plate.width(),
+                                   plate.width() * 300 / 560), 2.0, now=time.perf_counter() + 30)
+    painter.restore()
+    mark = render_postmark(150, tokens["pm"], "САД И ПОЧТА · ВСЁ ДОХОДИТ · ZAPRETCTRL ·",
+                           "4/4", "4.0", 2.0)
+    painter.setOpacity(0.92)
+    painter.drawPixmap(QPointF(plate.right() - 112, plate.top() - 30), mark)
+    painter.end()
+    return image
 
 
 def main() -> None:
+    application = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
     TARGET.parent.mkdir(parents=True, exist_ok=True)
-    build().save(TARGET, quality=95)
+    build().save(str(TARGET))
     print(f"Готово: {TARGET}")
+    del application
 
 
 if __name__ == "__main__":

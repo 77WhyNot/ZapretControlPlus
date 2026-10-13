@@ -47,7 +47,7 @@ def _letter_pixmap(title: str, size: int, ratio: float) -> QPixmap:
     painter.drawRoundedRect(QRectF(0, 0, size, size), size * 0.26, size * 0.26)
 
     letter = (title.strip()[:1] or "?").upper()
-    font = QFont("Bahnschrift", int(size * 0.5))
+    font = QFont("Geist", int(size * 0.5))
     font.setWeight(QFont.Weight.DemiBold)
     painter.setFont(font)
     painter.setPen(QColor("#FFFFFF"))
